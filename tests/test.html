@@ -161,6 +161,7 @@
     eq('ФИО работодателя для расписок', defaults().employerFullName, 'Григорий Разумовский');
     eq('Архив расписок по умолчанию выключен', defaults().sync.enabled, false);
     eq('Масштаб текста по умолчанию 100%', defaults().uiScale, 100);
+    eq('Пароль настроек помнится 10 минут по умолчанию', defaults().passwordTtlMinutes, 10);
     eq('Репозиторий архива по умолчанию', defaults().sync.repo, 'eliduc/metapel-data');
 
     // ---------- пароль ----------

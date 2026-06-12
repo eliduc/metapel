@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '1.1 от 12.06.2026';
+  var APP_VERSION = '1.2 от 12.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -29,7 +29,18 @@
   var extras = S.loadExtras();   // доп. платежи: подарки / под отчёт
   var returns = S.loadReturns(); // возвраты по отчёту (чеки, сдача)
   var activeTab = 'due';
-  var settingsUnlocked = false;
+
+  // пароль настроек «помнится» заданное число минут (реальное время,
+  // не зависит от симуляции даты)
+  function settingsUnlockedNow() {
+    return Date.now() < (S.getMeta('settingsUnlockUntil') || 0);
+  }
+
+  function unlockSettings() {
+    var ttl = settings.passwordTtlMinutes;
+    if (ttl == null || isNaN(ttl) || ttl < 0) ttl = 10;
+    S.setMeta('settingsUnlockUntil', Date.now() + ttl * 60 * 1000);
+  }
   var currentPay = null;       // вхождение в диалоге оплаты
   var payMethod = 'transfer';  // выбранный способ в диалоге оплаты
   var currentSign = null;      // {type:'log'|'extra', id} — чья подпись ставится
@@ -149,7 +160,8 @@
   // масштаб текста: настройка пользователя × прибавка для планшета
   function applyScale() {
     var tablet = window.matchMedia('(min-width: 768px)').matches ? 1.08 : 1;
-    var scale = (settings.uiScale || 100) / 100;
+    // 117 — потолок: «очень крупный» из старых настроек (130) тоже ужимается
+    var scale = Math.min(settings.uiScale || 100, 117) / 100;
     document.body.style.zoom = String(tablet * scale);
   }
 
@@ -732,7 +744,8 @@
         { path: 'employerFullName', label: 'ФИО работодателя (для расписок)', type: 'text' },
         { path: 'startDate', label: 'Дата начала работы', type: 'date' },
         { path: 'uiScale', label: 'Размер текста', type: 'select',
-          options: [[100, 'обычный'], [115, 'крупный'], [130, 'очень крупный']] }
+          options: [[100, 'обычный'], [110, 'крупный'], [117, 'очень крупный']] },
+        { path: 'passwordTtlMinutes', label: 'Помнить пароль настроек, минут', type: 'number' }
       ] },
       { section: '☁ Архив расписок на GitHub', enable: 'sync.enabled',
         hint: 'Подписанные расписки сохраняются файлами в приватный репозиторий GitHub. ' +
@@ -809,7 +822,7 @@
   }
 
   function renderSettings(content) {
-    if (!settingsUnlocked) {
+    if (!settingsUnlockedNow()) {
       content.appendChild(el('div', 'empty', 'Настройки защищены паролем.'));
       openPasswordModal();
       return;
@@ -952,7 +965,7 @@
   function checkPassword() {
     var v = $('#pass-input').value;
     if (C.hashString(v) === settings.passwordHash) {
-      settingsUnlocked = true;
+      unlockSettings();
       closeModals();
       render();
     } else {
@@ -995,7 +1008,6 @@
     document.querySelectorAll('.tab').forEach(function (b) {
       b.addEventListener('click', function () {
         activeTab = b.dataset.tab;
-        settingsUnlocked = false; // выходим из настроек — снова под паролем
         render();
       });
     });

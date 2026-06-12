@@ -533,21 +533,29 @@
     if (!r) { closeModals(); return; }
     r.signature = $('#sign-canvas').toDataURL('image/png');
     r.signedDate = today();
-    var kind = target.type === 'log' ? target.id.replace(/-.*$/, '') : r.kind;
     if (target.type === 'log') S.markPaid(target.id, r);
     else S.updateExtra(target.id, r);
-    if (window.MetapelSync.isOn(settings)) {
-      window.MetapelSync.enqueue(S, target.type, target.id, kind, r, settings);
-    }
     reloadData();
     closeModals();
     render();
     runSync();
   }
 
-  // досылка очереди расписок в архив GitHub
+  // Ставит в очередь все подписанные, но ещё не отправленные расписки
+  // (в т.ч. подписанные до включения архива) и отправляет очередь.
   function runSync() {
     if (!window.MetapelSync.isOn(settings)) return;
+    Object.keys(log).forEach(function (id) {
+      var r = log[id];
+      if (r.signature && !r.synced) {
+        window.MetapelSync.enqueue(S, 'log', id, id.replace(/-.*$/, ''), r, settings);
+      }
+    });
+    extras.forEach(function (e) {
+      if (e.signature && !e.synced) {
+        window.MetapelSync.enqueue(S, 'extra', e.id, e.kind, e, settings);
+      }
+    });
     window.MetapelSync.processQueue(settings, S, null).then(function (sent) {
       if (sent > 0) {
         reloadData();

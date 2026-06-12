@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '1.2 от 12.06.2026';
+  var APP_VERSION = '1.3 от 12.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -160,8 +160,8 @@
   // масштаб текста: настройка пользователя × прибавка для планшета
   function applyScale() {
     var tablet = window.matchMedia('(min-width: 768px)').matches ? 1.08 : 1;
-    // 117 — потолок: «очень крупный» из старых настроек (130) тоже ужимается
-    var scale = Math.min(settings.uiScale || 100, 117) / 100;
+    // 125 — потолок: «очень крупный» из старых настроек (130) тоже ужимается
+    var scale = Math.min(settings.uiScale || 100, 125) / 100;
     document.body.style.zoom = String(tablet * scale);
   }
 
@@ -744,7 +744,7 @@
         { path: 'employerFullName', label: 'ФИО работодателя (для расписок)', type: 'text' },
         { path: 'startDate', label: 'Дата начала работы', type: 'date' },
         { path: 'uiScale', label: 'Размер текста', type: 'select',
-          options: [[100, 'обычный'], [110, 'крупный'], [117, 'очень крупный']] },
+          options: [[100, 'обычный'], [115, 'крупный'], [125, 'очень крупный']] },
         { path: 'passwordTtlMinutes', label: 'Помнить пароль настроек, минут', type: 'number' }
       ] },
       { section: '☁ Архив расписок на GitHub', enable: 'sync.enabled',

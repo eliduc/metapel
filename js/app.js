@@ -635,6 +635,15 @@
       type: 'select', options: METHOD_OPTIONS };
   }
 
+  function syncStatusLine() {
+    if (!window.MetapelSync.isOn(settings)) return '⚪ Состояние: архив выключен.';
+    var q = S.loadSyncQueue().length;
+    var err = S.getMeta('lastSyncError');
+    if (err) return '🔴 Состояние: ошибка отправки — ' + err + (q ? ' (в очереди: ' + q + ')' : '');
+    if (q) return '🟡 Состояние: в очереди ' + q + ', отправится при следующем подключении.';
+    return '🟢 Состояние: всё отправлено.';
+  }
+
   function settingsForm() {
     return [
       { section: 'Общие', fields: [
@@ -648,7 +657,7 @@
         hint: 'Подписанные расписки сохраняются файлами в приватный репозиторий GitHub. ' +
           'Токен: github.com → Settings → Developer settings → Fine-grained tokens; ' +
           'доступ только к репозиторию данных, право Contents: Read and write. ' +
-          'Токен хранится только на этом устройстве.',
+          'Токен хранится только на этом устройстве. ' + syncStatusLine(),
         fields: [
         { path: 'sync.repo', label: 'Репозиторий (владелец/имя)', type: 'text' },
         { path: 'sync.token', label: 'Токен доступа', type: 'password' }
@@ -828,7 +837,8 @@
         value = inp.value;
         if (/^\d+$/.test(value)) value = parseInt(value, 10);
       } else {
-        value = inp.value;
+        // лишние пробелы при вставке (особенно токена) ломают доступ
+        value = inp.value.trim();
       }
       setPath(settings, inp.dataset.path, value);
     }

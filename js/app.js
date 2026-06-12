@@ -493,7 +493,7 @@
     $('#sign-text').innerHTML = 'Я, <b>' + esc(settings.workerFullName || settings.workerName) +
       '</b>, получил ' + what + ' <b>' + C.fmtMoney(r.paidAmount != null ? r.paidAmount : r.amount) +
       '</b><br>' + esc(r.title) + (r.note ? ' (' + esc(r.note) + ')' : '') +
-      ' · от: ' + esc(settings.employerName) +
+      ' · от: ' + esc(settings.employerFullName || settings.employerName) +
       ' · дата: ' + C.fmtDate(r.paidDate || r.date);
     $('#modal-sign').classList.add('open');
     setupSignCanvas();
@@ -641,6 +641,7 @@
         { path: 'workerName', label: 'Имя работника', type: 'text' },
         { path: 'workerFullName', label: 'ФИО работника (для расписок)', type: 'text' },
         { path: 'employerName', label: 'Имя работодателя', type: 'text' },
+        { path: 'employerFullName', label: 'ФИО работодателя (для расписок)', type: 'text' },
         { path: 'startDate', label: 'Дата начала работы', type: 'date' }
       ] },
       { section: '☁ Архив расписок на GitHub', enable: 'sync.enabled',

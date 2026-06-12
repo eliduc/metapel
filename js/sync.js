@@ -37,7 +37,7 @@ window.MetapelSync = (function () {
       signedDate: rec.signedDate,
       method: rec.method,
       worker: settings.workerFullName || settings.workerName,
-      employer: settings.employerName,
+      employer: settings.employerFullName || settings.employerName,
       note: rec.note || null,
       signature: rec.signature // PNG dataURL
     };

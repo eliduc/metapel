@@ -158,6 +158,7 @@
 
     // ---------- ФИО и архив ----------
     eq('ФИО для расписок по умолчанию', defaults().workerFullName, 'Джамшид Эргашев');
+    eq('ФИО работодателя для расписок', defaults().employerFullName, 'Григорий Разумовский');
     eq('Архив расписок по умолчанию выключен', defaults().sync.enabled, false);
     eq('Репозиторий архива по умолчанию', defaults().sync.repo, 'eliduc/metapel-data');
 

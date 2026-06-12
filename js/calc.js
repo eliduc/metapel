@@ -124,6 +124,7 @@ window.MetapelCalc = (function () {
       workerName: 'Джамшид',
       workerFullName: 'Джамшид Эргашев', // ФИО для текста расписок
       employerName: 'Григорий',
+      employerFullName: 'Григорий Разумовский', // ФИО работодателя для расписок
       startDate: '2026-06-10',
       passwordHash: hashString('1234'),
       // архив расписок: приватный репозиторий GitHub (Contents API)

@@ -35,9 +35,15 @@
     }
 
     function defaults() { return C.defaultSettings(); }
+    // базовая механика проверяется без зачёта часов Битуах Леуми
+    function noBl() {
+      var s = defaults();
+      s.bl.enabled = false;
+      return s;
+    }
     function clone(s) { return JSON.parse(JSON.stringify(s)); }
     function occs(today, horizon, settings) {
-      return C.generateOccurrences(settings || defaults(), today, horizon == null ? 60 : horizon);
+      return C.generateOccurrences(settings || noBl(), today, horizon == null ? 60 : horizon);
     }
     function find(list, id) {
       for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
@@ -77,7 +83,7 @@
     eq('Страховка за июль: сумма', ins && ins.amount, 300);
 
     // клампинг дня: 31-е число в феврале -> 28-е
-    var s31 = defaults();
+    var s31 = noBl();
     s31.types.insurance.dayOfMonth = 31;
     var feb = occs('2027-02-20', 30, s31);
     var insFeb = find(feb, 'insurance-2027-02');
@@ -90,7 +96,7 @@
     eq('Битуах Леуми за июль: 3,6% × 6443,85', bJul && bJul.amount, 231.98);
     eq('Битуах Леуми за июль: срок', bJul && bJul.dueDate, '2026-08-08');
 
-    var sq = defaults();
+    var sq = noBl();
     sq.types.bituach.frequency = 'quarterly';
     var q = occs('2026-10-01', 30, sq);
     var q2 = find(q, 'bituach-2026-Q2');
@@ -102,7 +108,7 @@
     eq('При квартальной частоте помесячных вхождений нет', find(q, 'bituach-2026-07'), null);
 
     // ---------- переключение частоты Битуах Леуми не теряет оплат ----------
-    var sqSwitch = defaults();
+    var sqSwitch = noBl();
     sqSwitch.types.bituach.frequency = 'quarterly';
     var paidJune = { 'bituach-2026-06': { paidDate: '2026-07-08' } };
     eq('Квартал не требует месяц, уже оплаченный помесячно (Q2 исчезает)',
@@ -112,7 +118,7 @@
     eq('Из Q3 исключён оплаченный помесячно июль (сумма за 2 месяца)',
       q3sw && q3sw.amount, 463.96);
     var paidQ3 = { 'bituach-2026-Q3': { paidDate: '2026-10-20' } };
-    var backMonthly = C.generateOccurrences(defaults(), '2026-10-01', 30, paidQ3);
+    var backMonthly = C.generateOccurrences(noBl(), '2026-10-01', 30, paidQ3);
     eq('Помесячный июль скрыт, если оплачен квартал Q3',
       find(backMonthly, 'bituach-2026-07'), null);
     eq('Июнь (Q2) при оплаченном Q3 остаётся',
@@ -162,8 +168,30 @@
     eq('Статус с отметкой об оплате = paid',
       C.getStatus(oPaid, { 'salary-2026-06': { paidDate: '2026-07-08' } }, '2026-07-09', st), 'paid');
 
+    // ---------- часы Битуах Леуми (гмлат сиуд) ----------
+    eq('Зачёт БЛ по умолчанию: 26 ч × 241 ₪', C.blMonthlyOffset(defaults()), 6266);
+    eq('По умолчанию зачёт включён', defaults().bl.enabled, true);
+    var blJuly = C.generateOccurrences(defaults(), '2026-08-01', 60);
+    var blSal = find(blJuly, 'salary-2026-07');
+    eq('Зарплата за июль с зачётом БЛ: 6500−6266 + 4×440', blSal && blSal.amount, 1994);
+    var blBit = find(blJuly, 'bituach-2026-07');
+    eq('Битуах Леуми с зачётом: 3,6% × (6443,85−6266)', blBit && blBit.amount, 6.4);
+    var blJune = find(C.generateOccurrences(defaults(), '2026-07-06', 60), 'salary-2026-06');
+    eq('Частичный июнь с зачётом: 4550 − 4386,20 + 3×440', blJune && blJune.amount, 1483.8);
+    var blPik = find(C.generateOccurrences(defaults(), '2027-01-05', 60), 'pikadon-2026-12');
+    eq('Пикадон с зачётом: 12,5% × 177,85', blPik && blPik.amount, 22.23);
+    var blHav = find(C.generateOccurrences(defaults(), '2027-06-01', 60), 'havraa-1');
+    eq('Хавраа — доля семьи 3,6%: 2090 × 0,036', blHav && blHav.amount, 75.24);
+    var blNoSoc = defaults();
+    blNoSoc.bl.applyToSocial = false;
+    var noSocList = C.generateOccurrences(blNoSoc, '2026-08-01', 60);
+    eq('Без applyToSocial взносы считаются от полной базы',
+      find(noSocList, 'bituach-2026-07').amount, 231.98);
+    eq('Зарплата при этом всё равно с зачётом',
+      find(noSocList, 'salary-2026-07').amount, 1994);
+
     // ---------- отключение типа ----------
-    var sOff = defaults();
+    var sOff = noBl();
     sOff.types.pocket.enabled = false;
     eq('Отключённый тип не генерируется',
       occs('2026-06-12', 60, sOff).filter(function (o) { return o.type === 'pocket'; }).length, 0);

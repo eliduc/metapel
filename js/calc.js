@@ -127,6 +127,16 @@ window.MetapelCalc = (function () {
       employerFullName: 'Григорий Разумовский', // ФИО работодателя для расписок
       uiScale: 100, // размер текста, % (115 — крупный, 125 — очень крупный)
       passwordTtlMinutes: 10, // сколько минут не спрашивать пароль настроек повторно
+      // Часы по уходу от Битуах Леуми (гмлат сиуд): организация по уходу
+      // получает деньги за часы и платит метапелю свою часть зарплаты.
+      // По умолчанию — максимум: уровень 6 при иностранном работнике,
+      // 26 часов в неделю, недельный час ≈ 241 ₪ в месяц (2025).
+      bl: {
+        enabled: true,
+        hoursPerWeek: 26,
+        hourValueMonth: 241,
+        applyToSocial: true // уменьшать также взносы, пикадон и хавраа
+      },
       startDate: '2026-06-10',
       passwordHash: hashString('1234'),
       // архив расписок: приватный репозиторий GitHub (Contents API)
@@ -190,6 +200,30 @@ window.MetapelCalc = (function () {
     };
   }
 
+  // ---------- зачёт часов Битуах Леуми ----------
+
+  // сумма, которую покрывает организация по уходу за счёт часов БЛ, ₪/мес
+  function blMonthlyOffset(settings) {
+    var bl = settings.bl || {};
+    if (!bl.enabled) return 0;
+    return round2((bl.hoursPerWeek || 0) * (bl.hourValueMonth || 0));
+  }
+
+  // доля зарплаты, которую семья платит из своих средств (0..1)
+  function blFamilyShare(settings) {
+    var net = settings.types.salary.net;
+    if (!net || net <= 0) return 1;
+    var off = blMonthlyOffset(settings);
+    if (off <= 0) return 1;
+    if (off >= net) return 0;
+    return (net - off) / net;
+  }
+
+  function blSocialOffset(settings) {
+    var bl = settings.bl || {};
+    return bl.enabled && bl.applyToSocial ? blMonthlyOffset(settings) : 0;
+  }
+
   // ---------- генерация вхождений ----------
 
   // Обходит отработанные календарные месяцы от даты начала работы,
@@ -212,7 +246,7 @@ window.MetapelCalc = (function () {
     return mkDate(dy, dm, clampDay(dy, dm, dayOfMonth));
   }
 
-  function genSalary(t, start, end, out) {
+  function genSalary(t, start, end, out, blOff, blSettings) {
     eachWorkedMonth(start, end, function (y, m, fromDay) {
       var due = nextMonthDue(y, m, t.dayOfMonth);
       if (due > end) return;
@@ -220,6 +254,8 @@ window.MetapelCalc = (function () {
       var workedDays = dim - fromDay + 1;
       var sats = countSaturdays(y, m, fromDay);
       var netPart = workedDays === dim ? t.net : round2(t.net * workedDays / dim);
+      var offPart = workedDays === dim ? blOff : round2(blOff * workedDays / dim);
+      var familyNet = Math.max(0, round2(netPart - offPart));
       var shabbat = sats * t.shabbatRate;
       var breakdown = [];
       if (workedDays === dim) {
@@ -228,18 +264,24 @@ window.MetapelCalc = (function () {
         breakdown.push('Нетто пропорционально (с ' + fromDay + '-го числа): ' +
           fmtMoney(t.net) + ' × ' + workedDays + '/' + dim + ' дней = ' + fmtMoney(netPart));
       }
+      if (offPart > 0) {
+        breakdown.push('Часы Битуах Леуми: ' + blSettings.hoursPerWeek + ' ч/нед × ' +
+          fmtMoney(blSettings.hourValueMonth) + (workedDays === dim ? '' : ' (пропорц.)') +
+          ' = − ' + fmtMoney(offPart) + ' (платит организация по уходу)');
+        breakdown.push('Доплата семьи: ' + fmtMoney(familyNet));
+      }
       breakdown.push('Шабат: ' + sats + ' ' + satWord(sats) + ' × ' +
         fmtMoney(t.shabbatRate) + ' = ' + fmtMoney(shabbat));
-      breakdown.push('Итого: ' + fmtMoney(netPart + shabbat));
+      breakdown.push('Итого: ' + fmtMoney(familyNet + shabbat));
       out.push({
         id: 'salary-' + y + '-' + pad2(m),
         type: 'salary',
         title: 'Зарплата за ' + monthLabel(y, m),
         dueDate: due,
-        amount: round2(netPart + shabbat),
+        amount: round2(familyNet + shabbat),
         breakdown: breakdown,
         // для пересчёта в диалоге оплаты
-        satCount: sats, satRate: t.shabbatRate, netPart: netPart
+        satCount: sats, satRate: t.shabbatRate, netPart: familyNet
       });
     });
   }
@@ -284,15 +326,30 @@ window.MetapelCalc = (function () {
     }
   }
 
-  function bituachMonthly(t) { return round2(t.grossBase * t.ratePercent / 100); }
+  // база для взносов: брутто минус часть, которую покрывают часы БЛ
+  // (взносы платятся только с доплаты из собственных средств семьи)
+  function bituachBase(t, blOff) {
+    return Math.max(0, round2(t.grossBase - blOff));
+  }
+
+  function bituachMonthly(t, blOff) {
+    return round2(bituachBase(t, blOff) * t.ratePercent / 100);
+  }
+
+  function bituachBaseLine(t, blOff) {
+    return blOff > 0
+      ? 'База: ' + fmtMoney(t.grossBase) + ' − зачёт часов БЛ ' + fmtMoney(blOff) +
+        ' = ' + fmtMoney(bituachBase(t, blOff)) + ' (взносы — только с доплаты семьи)'
+      : null;
+  }
 
   // При переключении частоты месяц/квартал оплаченные записи другого
   // режима остаются в журнале — учитываем их, чтобы не требовать
   // повторной оплаты тех же месяцев.
-  function genBituach(t, start, end, out, paidLog) {
+  function genBituach(t, start, end, out, paidLog, blOff) {
     paidLog = paidLog || {};
     if (t.frequency === 'quarterly') {
-      genBituachQuarterly(t, start, end, out, paidLog);
+      genBituachQuarterly(t, start, end, out, paidLog, blOff);
       return;
     }
     eachWorkedMonth(start, end, function (y, m, fromDay) {
@@ -302,14 +359,17 @@ window.MetapelCalc = (function () {
       if (due > end) return;
       var dim = daysInMonth(y, m);
       var workedDays = dim - fromDay + 1;
-      var full = bituachMonthly(t);
+      var full = bituachMonthly(t, blOff);
+      if (full <= 0) return; // часы БЛ покрывают всю базу
       var amount = workedDays === dim ? full : round2(full * workedDays / dim);
-      var breakdown = ['Битуах Леуми: ' + fmtPct(t.ratePercent) + ' × ' +
-        fmtMoney(t.grossBase) + ' = ' + fmtMoney(full)];
+      var breakdown = [];
+      var baseLine = bituachBaseLine(t, blOff);
+      if (baseLine) breakdown.push(baseLine);
+      breakdown.push('Битуах Леуми: ' + fmtPct(t.ratePercent) + ' × ' +
+        fmtMoney(bituachBase(t, blOff)) + ' = ' + fmtMoney(full));
       if (workedDays !== dim) {
         breakdown.push('Пропорционально ' + workedDays + '/' + dim + ' дней: ' + fmtMoney(amount));
       }
-      breakdown.push('Платится с доплаты сверх пособия по уходу (если оно есть)');
       out.push({
         id: 'bituach-' + y + '-' + pad2(m),
         type: 'bituach',
@@ -321,14 +381,15 @@ window.MetapelCalc = (function () {
     });
   }
 
-  function genBituachQuarterly(t, start, end, out, paidLog) {
+  function genBituachQuarterly(t, start, end, out, paidLog, blOff) {
     paidLog = paidLog || {};
+    if (bituachMonthly(t, blOff) <= 0) return; // часы БЛ покрывают всю базу
     var months = {}; // 'y-m' -> {y, m, amount}
     eachWorkedMonth(start, end, function (y, m, fromDay) {
       if (paidLog['bituach-' + y + '-' + pad2(m)]) return; // месяц уже оплачен помесячно
       var dim = daysInMonth(y, m);
       var workedDays = dim - fromDay + 1;
-      var full = bituachMonthly(t);
+      var full = bituachMonthly(t, blOff);
       months[y + '-' + m] = {
         y: y, m: m,
         amount: workedDays === dim ? full : round2(full * workedDays / dim)
@@ -349,8 +410,11 @@ window.MetapelCalc = (function () {
       var due = mkDate(dueY, dueM, clampDay(dueY, dueM, t.quarterDay));
       if (due > end) return;
       var total = 0;
-      var breakdown = ['Битуах Леуми: ' + fmtPct(t.ratePercent) + ' × ' +
-        fmtMoney(t.grossBase) + ' в месяц'];
+      var breakdown = [];
+      var baseLine = bituachBaseLine(t, blOff);
+      if (baseLine) breakdown.push(baseLine);
+      breakdown.push('Битуах Леуми: ' + fmtPct(t.ratePercent) + ' × ' +
+        fmtMoney(bituachBase(t, blOff)) + ' в месяц');
       qu.items.forEach(function (it) {
         total = round2(total + it.amount);
         breakdown.push(MONTHS_NOM[it.m - 1] + ': ' + fmtMoney(it.amount));
@@ -367,28 +431,35 @@ window.MetapelCalc = (function () {
     });
   }
 
-  function genPikadon(t, start, end, out) {
+  function genPikadon(t, start, end, out, blOff) {
     var pikStart = addMonthsISO(start, t.fromMonth - 1); // начало 7-го месяца работы
-    var pension = round2(t.grossBase * t.pensionPercent / 100);
-    var severance = round2(t.grossBase * t.severancePercent / 100);
+    var base = Math.max(0, round2(t.grossBase - blOff));
+    if (base <= 0) return; // часы БЛ покрывают всю базу — отчисления у организации
+    var pension = round2(base * t.pensionPercent / 100);
+    var severance = round2(base * t.severancePercent / 100);
     var amount = round2(pension + severance);
     eachWorkedMonth(start, end, function (y, m, fromDay) {
       var monthEnd = mkDate(y, m, daysInMonth(y, m));
       if (monthEnd < pikStart) return; // ещё не 7-й месяц
       var due = nextMonthDue(y, m, t.dayOfMonth);
       if (due > end) return;
+      var breakdown = [];
+      if (blOff > 0) {
+        breakdown.push('База: ' + fmtMoney(t.grossBase) + ' − зачёт часов БЛ ' +
+          fmtMoney(blOff) + ' = ' + fmtMoney(base) +
+          ' (за свою часть отчисляет организация по уходу)');
+      }
+      breakdown.push('Пенсия: ' + fmtPct(t.pensionPercent) + ' × ' + fmtMoney(base) + ' = ' + fmtMoney(pension));
+      breakdown.push('Компенсация: ' + fmtPct(t.severancePercent) + ' × ' + fmtMoney(base) + ' = ' + fmtMoney(severance));
+      breakdown.push('Итого: ' + fmtMoney(amount));
+      breakdown.push('Платится с ' + t.fromMonth + '-го месяца работы (с ' + fmtDate(pikStart) + ') в депозит «пикадон»');
       out.push({
         id: 'pikadon-' + y + '-' + pad2(m),
         type: 'pikadon',
         title: 'Пикадон за ' + monthLabel(y, m),
         dueDate: due,
         amount: amount,
-        breakdown: [
-          'Пенсия: ' + fmtPct(t.pensionPercent) + ' × ' + fmtMoney(t.grossBase) + ' = ' + fmtMoney(pension),
-          'Компенсация: ' + fmtPct(t.severancePercent) + ' × ' + fmtMoney(t.grossBase) + ' = ' + fmtMoney(severance),
-          'Итого: ' + fmtMoney(amount),
-          'Платится с ' + t.fromMonth + '-го месяца работы (с ' + fmtDate(pikStart) + ') в депозит «пикадон»'
-        ]
+        breakdown: breakdown
       });
     });
   }
@@ -400,23 +471,30 @@ window.MetapelCalc = (function () {
     return t.tiers[t.tiers.length - 1];
   }
 
-  function genHavraa(t, start, end, out) {
+  function genHavraa(t, start, end, out, familyShare) {
+    if (familyShare <= 0) return; // полностью у организации по уходу
     for (var k = 1; ; k++) {
       var due = addYears(start, k);
       if (due > end) break;
       var tier = havraaTier(t, k);
-      var amount = round2(tier.days * t.dayRate);
+      var full = round2(tier.days * t.dayRate);
+      var amount = round2(full * familyShare);
+      var breakdown = [
+        'Оздоровительные: ' + tier.days + ' ' + plural(tier.days, 'день', 'дня', 'дней') +
+          ' × ' + fmtMoney(t.dayRate) + ' = ' + fmtMoney(full)
+      ];
+      if (familyShare < 1) {
+        breakdown.push('Доля семьи в зарплате: ' + String(round2(familyShare * 100)).replace('.', ',') +
+          '% → ' + fmtMoney(amount) + ' (остальное — организация по уходу)');
+      }
+      breakdown.push('Выплачивается после каждого полного года работы (годовщина: ' + fmtDate(due) + ')');
       out.push({
         id: 'havraa-' + k,
         type: 'havraa',
         title: 'Дмей хавраа — за ' + k + '-й год работы',
         dueDate: due,
         amount: amount,
-        breakdown: [
-          'Оздоровительные: ' + tier.days + ' ' + plural(tier.days, 'день', 'дня', 'дней') +
-            ' × ' + fmtMoney(t.dayRate) + ' = ' + fmtMoney(amount),
-          'Выплачивается после каждого полного года работы (годовщина: ' + fmtDate(due) + ')'
-        ]
+        breakdown: breakdown
       });
     }
   }
@@ -450,13 +528,17 @@ window.MetapelCalc = (function () {
     var start = settings.startDate;
     var t = settings.types;
     var out = [];
+    var blOff = blMonthlyOffset(settings);
+    var blSoc = blSocialOffset(settings);
+    var famShare = (settings.bl && settings.bl.enabled && settings.bl.applyToSocial)
+      ? blFamilyShare(settings) : 1;
     if (start && /^\d{4}-\d{2}-\d{2}$/.test(start)) {
-      if (t.salary.enabled) genSalary(t.salary, start, end, out);
+      if (t.salary.enabled) genSalary(t.salary, start, end, out, blOff, settings.bl || {});
       if (t.pocket.enabled) genPocket(t.pocket, start, end, out);
       if (t.insurance.enabled) genInsurance(t.insurance, start, end, out);
-      if (t.bituach.enabled) genBituach(t.bituach, start, end, out, paidLog);
-      if (t.pikadon.enabled) genPikadon(t.pikadon, start, end, out);
-      if (t.havraa.enabled) genHavraa(t.havraa, start, end, out);
+      if (t.bituach.enabled) genBituach(t.bituach, start, end, out, paidLog, blSoc);
+      if (t.pikadon.enabled) genPikadon(t.pikadon, start, end, out, blSoc);
+      if (t.havraa.enabled) genHavraa(t.havraa, start, end, out, famShare);
       if (t.visa.enabled) {
         genYearly('visa', t.visa, start, end, out,
           function (due) { return 'Продление визы (' + parseISO(due).getFullYear() + ')'; },
@@ -527,6 +609,8 @@ window.MetapelCalc = (function () {
     plural: plural,
     hashString: hashString,
     defaultSettings: defaultSettings,
+    blMonthlyOffset: blMonthlyOffset,
+    blFamilyShare: blFamilyShare,
     generateOccurrences: generateOccurrences,
     getStatus: getStatus
   };

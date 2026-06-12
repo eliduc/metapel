@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '1.4 от 12.06.2026';
+  var APP_VERSION = '1.5 от 12.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -824,6 +824,17 @@
           options: [[100, 'обычный'], [115, 'крупный'], [125, 'очень крупный']] },
         { path: 'passwordTtlMinutes', label: 'Помнить пароль настроек, минут', type: 'number' }
       ] },
+      { section: '⏱ Часы Битуах Леуми (гмлат сиуд)', enable: 'bl.enabled',
+        hint: 'Битуах Леуми выделяет часы по уходу; организация по уходу получает за них деньги ' +
+          'и платит метапелю свою часть зарплаты — семья доплачивает остальное. ' +
+          'Максимум при иностранном работнике — 26 часов в неделю (уровень 6), ' +
+          'недельный час ≈ 241 ₪ в месяц (2025). Сейчас зачёт: ' +
+          C.fmtMoney(C.blMonthlyOffset(settings)) + ' в месяц.',
+        fields: [
+        { path: 'bl.hoursPerWeek', label: 'Часов в неделю от Битуах Леуми', type: 'number' },
+        { path: 'bl.hourValueMonth', label: 'Стоимость недельного часа, ₪ в месяц', type: 'number' },
+        { path: 'bl.applyToSocial', label: 'Уменьшать также взносы, пикадон и хавраа', type: 'checkbox' }
+      ] },
       { section: '☁ Архив расписок на GitHub', enable: 'sync.enabled',
         hint: 'Подписанные расписки сохраняются файлами в приватный репозиторий GitHub. ' +
           'Токен: github.com → Settings → Developer settings → Fine-grained tokens; ' +
@@ -949,6 +960,10 @@
             });
             input.selectedIndex = best;
           }
+        } else if (f.type === 'checkbox') {
+          input = el('input');
+          input.type = 'checkbox';
+          input.checked = !!getPath(settings, f.path);
         } else {
           input = el('input');
           input.type = f.type;

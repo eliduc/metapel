@@ -1,0 +1,439 @@
+/* Интерфейс рассчитан на пожилого пользователя со слабой моторикой:
+   крупный шрифт, большие зоны нажатия (56px+), высокий контраст,
+   статусы дублируются цветом, значком и словами. */
+
+* { box-sizing: border-box; }
+
+:root {
+  --bg: #f1f5f9;
+  --card-bg: #ffffff;
+  --text: #111827;
+  --muted: #374151;
+  --accent: #1d4ed8;
+  --green: #15803d;
+  --green-dark: #166534;
+  --red: #b91c1c;
+  --amber: #b45309;
+  --border: #cbd5e1;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+  font-size: 20px;
+  line-height: 1.45;
+}
+
+button { font-family: inherit; }
+
+.wrap {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 12px 14px 60px;
+}
+
+/* ---------- шапка ---------- */
+
+header { position: relative; padding-right: 64px; }
+
+header h1 {
+  font-size: 27px;
+  margin: 8px 0 2px;
+}
+
+#hdr-sub {
+  color: var(--muted);
+  font-size: 17px;
+  margin-bottom: 6px;
+}
+
+#hdr-today {
+  font-size: 21px;
+  margin-bottom: 10px;
+}
+
+.sim-badge {
+  background: var(--amber);
+  color: #fff;
+  border-radius: 8px;
+  padding: 2px 10px;
+  font-size: 15px;
+  vertical-align: middle;
+}
+
+#btn-settings {
+  position: absolute;
+  top: 6px;
+  right: 0;
+  width: 58px;
+  height: 58px;
+  font-size: 30px;
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  background: var(--card-bg);
+  cursor: pointer;
+  color: var(--muted);
+}
+
+#btn-notify {
+  margin-bottom: 10px;
+}
+
+/* ---------- вкладки ---------- */
+
+nav {
+  display: flex;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  padding: 8px 0;
+  z-index: 5;
+}
+
+.tab {
+  flex: 1;
+  border: 2px solid var(--border);
+  background: var(--card-bg);
+  border-radius: 14px;
+  padding: 14px 4px;
+  font-size: 20px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text);
+  position: relative;
+  min-height: 62px;
+}
+
+.tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#badge-due {
+  position: absolute;
+  top: -10px;
+  right: -4px;
+  background: var(--red);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+  border-radius: 14px;
+  min-width: 28px;
+  padding: 3px 8px;
+  border: 2px solid #fff;
+}
+
+/* ---------- большой баннер состояния ---------- */
+
+.banner {
+  border-radius: 16px;
+  padding: 18px 20px;
+  margin: 12px 0;
+  font-size: 23px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.banner-ok {
+  background: #dcfce7;
+  border: 3px solid var(--green);
+  color: var(--green-dark);
+}
+
+.banner-alert {
+  background: #fee2e2;
+  border: 3px solid var(--red);
+  color: var(--red);
+}
+
+.banner .banner-sub {
+  font-size: 19px;
+  font-weight: 400;
+  color: var(--text);
+  margin-top: 8px;
+}
+
+.summary {
+  background: #e0e7ff;
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin: 12px 0;
+  font-size: 20px;
+}
+
+.empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 40px 12px;
+  font-size: 22px;
+  line-height: 1.7;
+}
+
+/* ---------- карточки ---------- */
+
+.card {
+  background: var(--card-bg);
+  border: 2px solid var(--border);
+  border-left: 10px solid #888;
+  border-radius: 16px;
+  padding: 16px 18px;
+  margin: 14px 0;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .08);
+}
+
+.card.overdue { background: #fef2f2; border-color: #ef4444; }
+.card.due { background: #fffbeb; border-color: #f59e0b; }
+.card.paid-card { border-left-color: var(--green); }
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.card-title {
+  font-weight: 700;
+  font-size: 23px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-icon { font-size: 30px; line-height: 1; }
+
+.card-due {
+  font-size: 20px;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+.late { color: var(--red); font-weight: 700; }
+.soon { color: var(--amber); font-weight: 700; }
+.fine { color: var(--muted); }
+
+.card-amount {
+  font-size: 30px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* кнопка-раскрывашка «Как посчитано» */
+
+.btn-breakdown {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 13px;
+  font-size: 19px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+  min-height: 54px;
+}
+
+.breakdown-body {
+  display: none;
+  margin: 8px 0 0;
+  padding: 12px 16px 12px 34px;
+  background: #f8fafc;
+  border-radius: 12px;
+  font-size: 19px;
+  color: var(--muted);
+}
+
+.breakdown-body.open { display: block; }
+
+.breakdown-body li { margin: 6px 0; }
+
+.card-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ---------- кнопки ---------- */
+
+.btn {
+  border: none;
+  border-radius: 14px;
+  padding: 16px 22px;
+  font-size: 22px;
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 60px;
+}
+
+.btn-pay {
+  background: var(--green);
+  color: #fff;
+  width: 100%;
+}
+
+.btn-pay:hover { background: var(--green-dark); }
+
+.btn-undo {
+  background: #e2e8f0;
+  color: var(--text);
+  width: 100%;
+  font-weight: 600;
+}
+
+.btn-undo:hover { background: #cbd5e1; }
+
+.btn-light {
+  background: var(--card-bg);
+  border: 2px solid var(--border);
+  color: var(--text);
+  font-weight: 500;
+  font-size: 19px;
+  min-height: 56px;
+}
+
+/* ---------- модальные окна ---------- */
+
+.modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, .55);
+  z-index: 50;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+}
+
+.modal.open { display: flex; }
+
+.modal-box {
+  background: var(--card-bg);
+  border-radius: 18px;
+  padding: 22px;
+  width: 100%;
+  max-width: 480px;
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.modal-box h2 { margin: 0 0 6px; font-size: 25px; }
+
+.modal-box .muted { color: var(--muted); font-size: 19px; margin-bottom: 10px; }
+
+.modal-box ul {
+  padding-left: 22px;
+  font-size: 19px;
+  color: var(--muted);
+}
+
+.pay-amount-big {
+  font-size: 34px;
+  font-weight: 800;
+  margin: 6px 0 10px;
+}
+
+.modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.form-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.form-row label { font-size: 20px; flex: 1; }
+
+.form-row input, .form-row select {
+  width: 190px;
+  padding: 14px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  font-size: 22px;
+  background: #fff;
+  color: var(--text);
+  min-height: 56px;
+}
+
+/* степпер «− / +» для суббот */
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stepper button {
+  width: 58px;
+  height: 58px;
+  font-size: 30px;
+  font-weight: 700;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.stepper input {
+  width: 76px !important;
+  text-align: center;
+}
+
+.error { color: var(--red); font-size: 19px; margin-top: 8px; font-weight: 600; }
+
+.hint { color: var(--muted); font-size: 17px; margin-top: 8px; }
+
+/* ---------- настройки ---------- */
+
+.settings-form fieldset {
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  background: var(--card-bg);
+  margin: 14px 0;
+  padding: 10px 16px 14px;
+}
+
+.settings-form legend {
+  font-weight: 700;
+  font-size: 19px;
+  padding: 0 8px;
+}
+
+.legend-label { cursor: pointer; }
+
+.legend-label input[type="checkbox"] {
+  width: 26px;
+  height: 26px;
+  vertical-align: middle;
+}
+
+.settings-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+@media (max-width: 520px) {
+  body { font-size: 19px; }
+  .card-amount { font-size: 27px; }
+  .tab { font-size: 18px; padding: 12px 2px; }
+  .form-row { flex-direction: column; align-items: stretch; }
+  .form-row input, .form-row select { width: 100%; }
+  .stepper { justify-content: space-between; }
+  .stepper input { flex: 1; }
+}

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Тесты движка расчётов</title>
+  <style>
+    body { font-family: "Segoe UI", system-ui, sans-serif; margin: 20px; background: #f8fafc; }
+    h1 { font-size: 20px; }
+    table { border-collapse: collapse; width: 100%; background: #fff; }
+    th, td { border: 1px solid #cbd5e1; padding: 6px 10px; font-size: 13px; text-align: left; }
+    .pass { background: #dcfce7; }
+    .fail { background: #fee2e2; font-weight: bold; }
+    #summary { font-size: 16px; font-weight: bold; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>Тесты движка расчётов (calc.js)</h1>
+  <div id="summary"></div>
+  <table id="results">
+    <tr><th>#</th><th>Проверка</th><th>Ожидалось</th><th>Получено</th><th></th></tr>
+  </table>
+
+  <script src="../js/calc.js"></script>
+  <script>
+    var C = window.MetapelCalc;
+    var results = [];
+
+    function eq(name, actual, expected) {
+      results.push({
+        name: name,
+        actual: JSON.stringify(actual),
+        expected: JSON.stringify(expected),
+        pass: JSON.stringify(actual) === JSON.stringify(expected)
+      });
+    }
+
+    function defaults() { return C.defaultSettings(); }
+    function clone(s) { return JSON.parse(JSON.stringify(s)); }
+    function occs(today, horizon, settings) {
+      return C.generateOccurrences(settings || defaults(), today, horizon == null ? 60 : horizon);
+    }
+    function find(list, id) {
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      return null;
+    }
+
+    // ---------- календарь ----------
+    eq('Суббот в июне 2026 (полный месяц)', C.countSaturdays(2026, 6), 4);
+    eq('Суббот в июне 2026 с 10-го числа', C.countSaturdays(2026, 6, 10), 3);
+    eq('Суббот в июле 2026', C.countSaturdays(2026, 7), 4);
+    eq('diffDays', C.diffDays('2026-07-08', '2026-07-05'), 3);
+    eq('addYears 2026-06-10 +1', C.addYears('2026-06-10', 1), '2027-06-10');
+    eq('addMonthsISO 2026-06-10 +6 (начало 7-го месяца)', C.addMonthsISO('2026-06-10', 6), '2026-12-10');
+
+    // ---------- зарплата ----------
+    var june = occs('2026-06-12');
+    var sJun = find(june, 'salary-2026-06');
+    eq('Зарплата за июнь: срок', sJun && sJun.dueDate, '2026-07-08');
+    eq('Зарплата за июнь: сумма (6500×21/30 + 3×440 = 4550+1320)', sJun && sJun.amount, 5870);
+    eq('Зарплата за июнь: суббот посчитано', sJun && sJun.satCount, 3);
+    eq('Зарплата за июнь: есть разбивка', sJun && sJun.breakdown.length >= 3, true);
+
+    var july = occs('2026-08-01');
+    var sJul = find(july, 'salary-2026-07');
+    eq('Зарплата за июль: срок', sJul && sJul.dueDate, '2026-08-08');
+    eq('Зарплата за июль: сумма (6500 + 4×440)', sJul && sJul.amount, 8260);
+
+    // ---------- карманные ----------
+    var p1 = june.filter(function (o) { return o.type === 'pocket'; })[0];
+    eq('Первые карманные: первое воскресенье после 10.06', p1 && p1.id, 'pocket-2026-06-14');
+    eq('Карманные: сумма', p1 && p1.amount, 100);
+
+    // ---------- страховка ----------
+    eq('Страховки за июнь нет (8.06 раньше начала работы)', find(june, 'insurance-2026-06'), null);
+    var ins = find(june, 'insurance-2026-07');
+    eq('Страховка за июль: срок', ins && ins.dueDate, '2026-07-08');
+    eq('Страховка за июль: сумма', ins && ins.amount, 300);
+
+    // клампинг дня: 31-е число в феврале -> 28-е
+    var s31 = defaults();
+    s31.types.insurance.dayOfMonth = 31;
+    var feb = occs('2027-02-20', 30, s31);
+    var insFeb = find(feb, 'insurance-2027-02');
+    eq('Страховка с днём 31 в феврале 2027 -> 28.02', insFeb && insFeb.dueDate, '2027-02-28');
+
+    // ---------- Битуах Леуми ----------
+    var bJun = find(june, 'bituach-2026-06');
+    eq('Битуах Леуми за июнь (пропорция 21/30 от 231,98)', bJun && bJun.amount, 162.39);
+    var bJul = find(july, 'bituach-2026-07');
+    eq('Битуах Леуми за июль: 3,6% × 6443,85', bJul && bJul.amount, 231.98);
+    eq('Битуах Леуми за июль: срок', bJul && bJul.dueDate, '2026-08-08');
+
+    var sq = defaults();
+    sq.types.bituach.frequency = 'quarterly';
+    var q = occs('2026-10-01', 30, sq);
+    var q2 = find(q, 'bituach-2026-Q2');
+    eq('Битуах Леуми 2-й квартал (только июнь): сумма', q2 && q2.amount, 162.39);
+    eq('Битуах Леуми 2-й квартал: срок 20.07', q2 && q2.dueDate, '2026-07-20');
+    var q3 = find(q, 'bituach-2026-Q3');
+    eq('Битуах Леуми 3-й квартал (3 месяца): сумма', q3 && q3.amount, 695.94);
+    eq('Битуах Леуми 3-й квартал: срок 20.10', q3 && q3.dueDate, '2026-10-20');
+    eq('При квартальной частоте помесячных вхождений нет', find(q, 'bituach-2026-07'), null);
+
+    // ---------- пикадон ----------
+    eq('Пикадона за ноябрь 2026 нет (раньше 7-го месяца)',
+      find(occs('2026-12-01'), 'pikadon-2026-11'), null);
+    var dec = occs('2027-01-05');
+    var pik = find(dec, 'pikadon-2026-12');
+    eq('Первый пикадон: за декабрь 2026', pik !== null, true);
+    eq('Пикадон: срок 8 января 2027', pik && pik.dueDate, '2027-01-08');
+    eq('Пикадон: сумма 6,5% + 6% от 6443,85 (418,85 + 386,63)', pik && pik.amount, 805.48);
+
+    // ---------- хавраа ----------
+    var y2027 = occs('2027-06-01');
+    var h1 = find(y2027, 'havraa-1');
+    eq('Хавраа за 1-й год: срок (годовщина)', h1 && h1.dueDate, '2027-06-10');
+    eq('Хавраа за 1-й год: 5 × 418', h1 && h1.amount, 2090);
+    var h2 = find(occs('2028-06-01'), 'havraa-2');
+    eq('Хавраа за 2-й год: 6 × 418', h2 && h2.amount, 2508);
+    var h4 = find(occs('2030-06-01'), 'havraa-4');
+    eq('Хавраа за 4-й год: 7 × 418', h4 && h4.amount, 2926);
+
+    // ---------- виза, тагид, разрешение ----------
+    var v = find(y2027, 'visa-2027');
+    eq('Виза: первая через год, срок', v && v.dueDate, '2027-06-10');
+    eq('Виза: сумма', v && v.amount, 205);
+    var tg = find(y2027, 'tagid-2027');
+    eq('Тагид: сумма', tg && tg.amount, 840);
+    eq('Разрешения в 2027 нет (раз в 4 года)', find(y2027, 'permit-2027'), null);
+    var pm = find(occs('2030-06-01'), 'permit-2030');
+    eq('Разрешение: первое в 2030, срок', pm && pm.dueDate, '2030-06-10');
+    eq('Разрешение: сумма', pm && pm.amount, 370);
+
+    // ---------- статусы ----------
+    var st = defaults();
+    function statusAt(today) {
+      var o = find(occs(today), 'salary-2026-06');
+      return C.getStatus(o, {}, today, st);
+    }
+    eq('Статус зарплаты 1.07 (за 7 дней, окно 3) = upcoming', statusAt('2026-07-01'), 'upcoming');
+    eq('Статус зарплаты 5.07 (за 3 дня) = due', statusAt('2026-07-05'), 'due');
+    eq('Статус зарплаты 8.07 (в срок) = due', statusAt('2026-07-08'), 'due');
+    eq('Статус зарплаты 9.07 = overdue', statusAt('2026-07-09'), 'overdue');
+    var oPaid = find(occs('2026-07-09'), 'salary-2026-06');
+    eq('Статус с отметкой об оплате = paid',
+      C.getStatus(oPaid, { 'salary-2026-06': { paidDate: '2026-07-08' } }, '2026-07-09', st), 'paid');
+
+    // ---------- отключение типа ----------
+    var sOff = defaults();
+    sOff.types.pocket.enabled = false;
+    eq('Отключённый тип не генерируется',
+      occs('2026-06-12', 60, sOff).filter(function (o) { return o.type === 'pocket'; }).length, 0);
+
+    // ---------- пароль ----------
+    eq('Хэш пароля стабилен', C.hashString('1234') === C.hashString('1234'), true);
+    eq('Хэш разных паролей различается', C.hashString('1234') !== C.hashString('1235'), true);
+
+    // ---------- вывод ----------
+    var table = document.getElementById('results');
+    var passed = 0;
+    results.forEach(function (r, i) {
+      var tr = document.createElement('tr');
+      tr.className = r.pass ? 'pass' : 'fail';
+      tr.innerHTML = '<td>' + (i + 1) + '</td><td>' + r.name + '</td><td>' +
+        r.expected + '</td><td>' + r.actual + '</td><td>' + (r.pass ? '✓' : '✗ FAIL') + '</td>';
+      table.appendChild(tr);
+      if (r.pass) passed++;
+    });
+    var ok = passed === results.length;
+    document.getElementById('summary').textContent =
+      (ok ? '✅ ' : '❌ ') + passed + ' / ' + results.length + ' проверок пройдено';
+    document.title = (ok ? 'PASS' : 'FAIL') + ' ' + passed + '/' + results.length;
+  </script>
+</body>
+</html>

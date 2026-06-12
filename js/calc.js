@@ -1,0 +1,508 @@
+/*
+ * MetapelCalc — чистый движок расчётов выплат (без DOM).
+ * Все функции принимают «сегодня» параметром, чтобы движок был
+ * тестируемым и переносимым в Android-версию.
+ * Даты — строки ISO 'YYYY-MM-DD' (сравниваются как строки).
+ */
+window.MetapelCalc = (function () {
+  'use strict';
+
+  var MONTHS_NOM = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+    'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+  var MONTHS_GEN = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+    'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+  var WEEKDAYS = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
+  var WEEKDAYS_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  // «заплатить … в среду / во вторник»
+  var WEEKDAYS_ACC = ['в воскресенье', 'в понедельник', 'во вторник', 'в среду',
+    'в четверг', 'в пятницу', 'в субботу'];
+
+  // ---------- даты ----------
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  function parseISO(s) {
+    var p = s.split('-');
+    return new Date(+p[0], +p[1] - 1, +p[2]);
+  }
+
+  function toISO(d) {
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+
+  function mkDate(y, m, day) { return y + '-' + pad2(m) + '-' + pad2(day); }
+
+  function addDays(iso, n) {
+    var d = parseISO(iso);
+    d.setDate(d.getDate() + n);
+    return toISO(d);
+  }
+
+  // a - b, в днях
+  function diffDays(a, b) {
+    return Math.round((parseISO(a) - parseISO(b)) / 86400000);
+  }
+
+  function daysInMonth(y, m) { return new Date(y, m, 0).getDate(); } // m: 1..12
+
+  function clampDay(y, m, day) { return Math.min(day, daysInMonth(y, m)); }
+
+  // дата через n лет с тем же днём/месяцем
+  function addYears(iso, n) {
+    var d = parseISO(iso);
+    return mkDate(d.getFullYear() + n, d.getMonth() + 1,
+      clampDay(d.getFullYear() + n, d.getMonth() + 1, d.getDate()));
+  }
+
+  function addMonthsISO(iso, n) {
+    var d = parseISO(iso);
+    var m0 = d.getMonth() + n;
+    var y = d.getFullYear() + Math.floor(m0 / 12);
+    var m = (m0 % 12 + 12) % 12 + 1;
+    return mkDate(y, m, clampDay(y, m, d.getDate()));
+  }
+
+  function countSaturdays(y, m, fromDay, toDay) {
+    fromDay = fromDay || 1;
+    toDay = toDay || daysInMonth(y, m);
+    var c = 0;
+    for (var d = fromDay; d <= toDay; d++) {
+      if (new Date(y, m - 1, d).getDay() === 6) c++;
+    }
+    return c;
+  }
+
+  // ---------- форматирование ----------
+
+  function round2(n) { return Math.round(n * 100) / 100; }
+
+  function fmtMoney(n) {
+    var r = round2(n);
+    var s = r.toLocaleString('ru-RU', {
+      minimumFractionDigits: (r % 1 === 0 ? 0 : 2),
+      maximumFractionDigits: 2
+    });
+    return s + ' ₪';
+  }
+
+  function fmtPct(n) { return String(n).replace('.', ',') + '%'; }
+
+  function fmtDate(iso) {
+    var d = parseISO(iso);
+    return d.getDate() + ' ' + MONTHS_GEN[d.getMonth()] + ' ' + d.getFullYear();
+  }
+
+  function fmtDateShort(iso) {
+    var d = parseISO(iso);
+    return WEEKDAYS_SHORT[d.getDay()] + ', ' + d.getDate() + ' ' + MONTHS_GEN[d.getMonth()];
+  }
+
+  function monthLabel(y, m) { return MONTHS_NOM[m - 1] + ' ' + y; }
+
+  function plural(n, one, few, many) {
+    var n10 = n % 10, n100 = n % 100;
+    if (n10 === 1 && n100 !== 11) return one;
+    if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return few;
+    return many;
+  }
+
+  function satWord(n) { return plural(n, 'суббота', 'субботы', 'суббот'); }
+
+  // Простой хэш для пароля настроек — защита от случайного входа, не криптография.
+  function hashString(s) {
+    var h = 5381;
+    for (var i = 0; i < s.length; i++) {
+      h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    }
+    return 'h' + (h >>> 0).toString(16);
+  }
+
+  // ---------- настройки по умолчанию ----------
+
+  function defaultSettings() {
+    return {
+      workerName: 'Джамшид',
+      employerName: 'Григорий',
+      startDate: '2026-06-10',
+      passwordHash: hashString('1234'),
+      types: {
+        salary: {
+          enabled: true, label: 'Зарплата',
+          net: 6500, shabbatRate: 440, dayOfMonth: 8, noticeDays: 3
+        },
+        pocket: {
+          enabled: true, label: 'Карманные (дмей кис)',
+          amount: 100, weekday: 0, noticeDays: 1
+        },
+        insurance: {
+          enabled: true, label: 'Мед. страховка',
+          amount: 300, dayOfMonth: 8, noticeDays: 3
+        },
+        bituach: {
+          enabled: true, label: 'Битуах Леуми',
+          ratePercent: 3.6, grossBase: 6443.85,
+          frequency: 'monthly', dayOfMonth: 8, quarterDay: 20, noticeDays: 5
+        },
+        pikadon: {
+          enabled: true, label: 'Пикадон (пенсия + компенсация)',
+          pensionPercent: 6.5, severancePercent: 6, grossBase: 6443.85,
+          fromMonth: 7, dayOfMonth: 8, noticeDays: 5
+        },
+        havraa: {
+          enabled: true, label: 'Дмей хавраа',
+          dayRate: 418,
+          tiers: [
+            { from: 1, to: 1, days: 5 },
+            { from: 2, to: 3, days: 6 },
+            { from: 4, to: 10, days: 7 },
+            { from: 11, to: 99, days: 7 }
+          ],
+          noticeDays: 14
+        },
+        visa: {
+          enabled: true, label: 'Продление визы',
+          amount: 205, noticeDays: 14
+        },
+        tagid: {
+          enabled: true, label: 'Корпорация (тагид)',
+          amount: 840, noticeDays: 14
+        },
+        permit: {
+          enabled: true, label: 'Продление разрешения',
+          amount: 370, intervalYears: 4, noticeDays: 14
+        }
+      }
+    };
+  }
+
+  // ---------- генерация вхождений ----------
+
+  // Обходит отработанные календарные месяцы от даты начала работы,
+  // пока 1-е число месяца <= endISO. cb(y, m, fromDay) — fromDay > 1
+  // только в первом (частичном) месяце.
+  function eachWorkedMonth(startISO, endISO, cb) {
+    var sd = parseISO(startISO);
+    var y = sd.getFullYear(), m = sd.getMonth() + 1;
+    while (mkDate(y, m, 1) <= endISO) {
+      var fromDay = (y === sd.getFullYear() && m === sd.getMonth() + 1) ? sd.getDate() : 1;
+      cb(y, m, fromDay);
+      m++;
+      if (m > 12) { m = 1; y++; }
+    }
+  }
+
+  function nextMonthDue(y, m, dayOfMonth) {
+    var dy = m === 12 ? y + 1 : y;
+    var dm = m === 12 ? 1 : m + 1;
+    return mkDate(dy, dm, clampDay(dy, dm, dayOfMonth));
+  }
+
+  function genSalary(t, start, end, out) {
+    eachWorkedMonth(start, end, function (y, m, fromDay) {
+      var due = nextMonthDue(y, m, t.dayOfMonth);
+      if (due > end) return;
+      var dim = daysInMonth(y, m);
+      var workedDays = dim - fromDay + 1;
+      var sats = countSaturdays(y, m, fromDay);
+      var netPart = workedDays === dim ? t.net : round2(t.net * workedDays / dim);
+      var shabbat = sats * t.shabbatRate;
+      var breakdown = [];
+      if (workedDays === dim) {
+        breakdown.push('Нетто за месяц: ' + fmtMoney(t.net));
+      } else {
+        breakdown.push('Нетто пропорционально (с ' + fromDay + '-го числа): ' +
+          fmtMoney(t.net) + ' × ' + workedDays + '/' + dim + ' дней = ' + fmtMoney(netPart));
+      }
+      breakdown.push('Шабат: ' + sats + ' ' + satWord(sats) + ' × ' +
+        fmtMoney(t.shabbatRate) + ' = ' + fmtMoney(shabbat));
+      breakdown.push('Итого: ' + fmtMoney(netPart + shabbat));
+      out.push({
+        id: 'salary-' + y + '-' + pad2(m),
+        type: 'salary',
+        title: 'Зарплата за ' + monthLabel(y, m),
+        dueDate: due,
+        amount: round2(netPart + shabbat),
+        breakdown: breakdown,
+        // для пересчёта в диалоге оплаты
+        satCount: sats, satRate: t.shabbatRate, netPart: netPart
+      });
+    });
+  }
+
+  function genPocket(t, start, end, out) {
+    var d = parseISO(start);
+    while (d.getDay() !== t.weekday) d.setDate(d.getDate() + 1);
+    while (toISO(d) <= end) {
+      var iso = toISO(d);
+      out.push({
+        id: 'pocket-' + iso,
+        type: 'pocket',
+        title: 'Карманные деньги',
+        dueDate: iso,
+        amount: t.amount,
+        breakdown: ['Еженедельные карманные (дмей кис): ' + fmtMoney(t.amount),
+          'Выдаются каждое ' + WEEKDAYS[t.weekday] + ' (сверх зарплаты, по договорённости)']
+      });
+      d.setDate(d.getDate() + 7);
+    }
+  }
+
+  function genInsurance(t, start, end, out) {
+    var sd = parseISO(start);
+    var y = sd.getFullYear(), m = sd.getMonth() + 1;
+    while (true) {
+      var due = mkDate(y, m, clampDay(y, m, t.dayOfMonth));
+      if (due > end) break;
+      if (due >= start) {
+        out.push({
+          id: 'insurance-' + y + '-' + pad2(m),
+          type: 'insurance',
+          title: 'Мед. страховка за ' + monthLabel(y, m),
+          dueDate: due,
+          amount: t.amount,
+          breakdown: ['Страховка больничной кассы (Клалит/Маккаби/Леумит): ' +
+            fmtMoney(t.amount) + ' в месяц']
+        });
+      }
+      m++;
+      if (m > 12) { m = 1; y++; }
+    }
+  }
+
+  function bituachMonthly(t) { return round2(t.grossBase * t.ratePercent / 100); }
+
+  function genBituach(t, start, end, out) {
+    if (t.frequency === 'quarterly') {
+      genBituachQuarterly(t, start, end, out);
+      return;
+    }
+    eachWorkedMonth(start, end, function (y, m, fromDay) {
+      var due = nextMonthDue(y, m, t.dayOfMonth);
+      if (due > end) return;
+      var dim = daysInMonth(y, m);
+      var workedDays = dim - fromDay + 1;
+      var full = bituachMonthly(t);
+      var amount = workedDays === dim ? full : round2(full * workedDays / dim);
+      var breakdown = ['Битуах Леуми: ' + fmtPct(t.ratePercent) + ' × ' +
+        fmtMoney(t.grossBase) + ' = ' + fmtMoney(full)];
+      if (workedDays !== dim) {
+        breakdown.push('Пропорционально ' + workedDays + '/' + dim + ' дней: ' + fmtMoney(amount));
+      }
+      breakdown.push('Платится с доплаты сверх пособия по уходу (если оно есть)');
+      out.push({
+        id: 'bituach-' + y + '-' + pad2(m),
+        type: 'bituach',
+        title: 'Битуах Леуми за ' + monthLabel(y, m),
+        dueDate: due,
+        amount: amount,
+        breakdown: breakdown
+      });
+    });
+  }
+
+  function genBituachQuarterly(t, start, end, out) {
+    var months = {}; // 'y-m' -> {y, m, amount}
+    eachWorkedMonth(start, end, function (y, m, fromDay) {
+      var dim = daysInMonth(y, m);
+      var workedDays = dim - fromDay + 1;
+      var full = bituachMonthly(t);
+      months[y + '-' + m] = {
+        y: y, m: m,
+        amount: workedDays === dim ? full : round2(full * workedDays / dim)
+      };
+    });
+    var quarters = {}; // 'y-q' -> {y, q, items[]}
+    Object.keys(months).forEach(function (k) {
+      var it = months[k];
+      var q = Math.floor((it.m - 1) / 3) + 1;
+      var qk = it.y + '-' + q;
+      (quarters[qk] = quarters[qk] || { y: it.y, q: q, items: [] }).items.push(it);
+    });
+    Object.keys(quarters).sort().forEach(function (qk) {
+      var qu = quarters[qk];
+      var dueM = qu.q * 3 + 1; // месяц после квартала
+      var dueY = qu.y;
+      if (dueM > 12) { dueM = 1; dueY++; }
+      var due = mkDate(dueY, dueM, clampDay(dueY, dueM, t.quarterDay));
+      if (due > end) return;
+      var total = 0;
+      var breakdown = ['Битуах Леуми: ' + fmtPct(t.ratePercent) + ' × ' +
+        fmtMoney(t.grossBase) + ' в месяц'];
+      qu.items.forEach(function (it) {
+        total = round2(total + it.amount);
+        breakdown.push(MONTHS_NOM[it.m - 1] + ': ' + fmtMoney(it.amount));
+      });
+      breakdown.push('Итого за квартал: ' + fmtMoney(total));
+      out.push({
+        id: 'bituach-' + qu.y + '-Q' + qu.q,
+        type: 'bituach',
+        title: 'Битуах Леуми за ' + qu.q + '-й квартал ' + qu.y,
+        dueDate: due,
+        amount: total,
+        breakdown: breakdown
+      });
+    });
+  }
+
+  function genPikadon(t, start, end, out) {
+    var pikStart = addMonthsISO(start, t.fromMonth - 1); // начало 7-го месяца работы
+    var pension = round2(t.grossBase * t.pensionPercent / 100);
+    var severance = round2(t.grossBase * t.severancePercent / 100);
+    var amount = round2(pension + severance);
+    eachWorkedMonth(start, end, function (y, m, fromDay) {
+      var monthEnd = mkDate(y, m, daysInMonth(y, m));
+      if (monthEnd < pikStart) return; // ещё не 7-й месяц
+      var due = nextMonthDue(y, m, t.dayOfMonth);
+      if (due > end) return;
+      out.push({
+        id: 'pikadon-' + y + '-' + pad2(m),
+        type: 'pikadon',
+        title: 'Пикадон за ' + monthLabel(y, m),
+        dueDate: due,
+        amount: amount,
+        breakdown: [
+          'Пенсия: ' + fmtPct(t.pensionPercent) + ' × ' + fmtMoney(t.grossBase) + ' = ' + fmtMoney(pension),
+          'Компенсация: ' + fmtPct(t.severancePercent) + ' × ' + fmtMoney(t.grossBase) + ' = ' + fmtMoney(severance),
+          'Итого: ' + fmtMoney(amount),
+          'Платится с ' + t.fromMonth + '-го месяца работы (с ' + fmtDate(pikStart) + ') в депозит «пикадон»'
+        ]
+      });
+    });
+  }
+
+  function havraaTier(t, yearN) {
+    for (var i = 0; i < t.tiers.length; i++) {
+      if (yearN >= t.tiers[i].from && yearN <= t.tiers[i].to) return t.tiers[i];
+    }
+    return t.tiers[t.tiers.length - 1];
+  }
+
+  function genHavraa(t, start, end, out) {
+    for (var k = 1; ; k++) {
+      var due = addYears(start, k);
+      if (due > end) break;
+      var tier = havraaTier(t, k);
+      var amount = round2(tier.days * t.dayRate);
+      out.push({
+        id: 'havraa-' + k,
+        type: 'havraa',
+        title: 'Дмей хавраа — за ' + k + '-й год работы',
+        dueDate: due,
+        amount: amount,
+        breakdown: [
+          'Оздоровительные: ' + tier.days + ' ' + plural(tier.days, 'день', 'дня', 'дней') +
+            ' × ' + fmtMoney(t.dayRate) + ' = ' + fmtMoney(amount),
+          'Выплачивается после каждого полного года работы (годовщина: ' + fmtDate(due) + ')'
+        ]
+      });
+    }
+  }
+
+  function genYearly(typeKey, t, start, end, out, titleFn, breakdownFn, intervalYears) {
+    var step = intervalYears || 1;
+    for (var k = step; ; k += step) {
+      var due = addYears(start, k);
+      if (due > end) break;
+      out.push({
+        id: typeKey + '-' + parseISO(due).getFullYear(),
+        type: typeKey,
+        title: titleFn(due),
+        dueDate: due,
+        amount: t.amount,
+        breakdown: breakdownFn(due)
+      });
+    }
+  }
+
+  /**
+   * Генерирует все вхождения платежей от даты начала работы
+   * до today + horizonDays. Прошлые неоплаченные остаются видимыми
+   * (статус overdue — напоминание каждый день).
+   */
+  function generateOccurrences(settings, todayISO, horizonDays) {
+    if (horizonDays == null) horizonDays = 60;
+    var end = addDays(todayISO, horizonDays);
+    var start = settings.startDate;
+    var t = settings.types;
+    var out = [];
+    if (start && /^\d{4}-\d{2}-\d{2}$/.test(start)) {
+      if (t.salary.enabled) genSalary(t.salary, start, end, out);
+      if (t.pocket.enabled) genPocket(t.pocket, start, end, out);
+      if (t.insurance.enabled) genInsurance(t.insurance, start, end, out);
+      if (t.bituach.enabled) genBituach(t.bituach, start, end, out);
+      if (t.pikadon.enabled) genPikadon(t.pikadon, start, end, out);
+      if (t.havraa.enabled) genHavraa(t.havraa, start, end, out);
+      if (t.visa.enabled) {
+        genYearly('visa', t.visa, start, end, out,
+          function (due) { return 'Продление визы (' + parseISO(due).getFullYear() + ')'; },
+          function () {
+            return ['Сбор за продление визы: ' + fmtMoney(t.visa.amount) + ' (раз в год)',
+              'Платится в Управление по делам населения и иммиграции'];
+          });
+      }
+      if (t.tagid.enabled) {
+        genYearly('tagid', t.tagid, start, end, out,
+          function (due) { return 'Корпорация — тагид (' + parseISO(due).getFullYear() + ')'; },
+          function () {
+            return ['Регистрация в лицензированной корпорации: ' + fmtMoney(t.tagid.amount) +
+              ' в год (70 × 12)'];
+          });
+      }
+      if (t.permit.enabled) {
+        genYearly('permit', t.permit, start, end, out,
+          function (due) { return 'Продление разрешения (' + parseISO(due).getFullYear() + ')'; },
+          function () {
+            return ['Сбор за продление разрешения: ' + fmtMoney(t.permit.amount) +
+              ' (раз в ' + t.permit.intervalYears + ' года)'];
+          },
+          t.permit.intervalYears);
+      }
+    }
+    out.sort(function (a, b) {
+      return a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : (a.type < b.type ? -1 : 1);
+    });
+    return out;
+  }
+
+  /**
+   * Статус вхождения:
+   *  paid     — есть отметка об оплате;
+   *  overdue  — срок прошёл, не оплачено (напоминать каждый день);
+   *  due      — сегодня внутри окна напоминания (noticeDays до срока);
+   *  upcoming — будущий платёж вне окна.
+   */
+  function getStatus(occ, log, todayISO, settings) {
+    if (log && log[occ.id]) return 'paid';
+    if (occ.dueDate < todayISO) return 'overdue';
+    var notice = settings.types[occ.type] ? settings.types[occ.type].noticeDays : 0;
+    if (diffDays(occ.dueDate, todayISO) <= notice) return 'due';
+    return 'upcoming';
+  }
+
+  return {
+    MONTHS_NOM: MONTHS_NOM,
+    MONTHS_GEN: MONTHS_GEN,
+    WEEKDAYS: WEEKDAYS,
+    WEEKDAYS_ACC: WEEKDAYS_ACC,
+    parseISO: parseISO,
+    toISO: toISO,
+    mkDate: mkDate,
+    addDays: addDays,
+    addYears: addYears,
+    addMonthsISO: addMonthsISO,
+    diffDays: diffDays,
+    daysInMonth: daysInMonth,
+    countSaturdays: countSaturdays,
+    round2: round2,
+    fmtMoney: fmtMoney,
+    fmtPct: fmtPct,
+    fmtDate: fmtDate,
+    fmtDateShort: fmtDateShort,
+    monthLabel: monthLabel,
+    plural: plural,
+    hashString: hashString,
+    defaultSettings: defaultSettings,
+    generateOccurrences: generateOccurrences,
+    getStatus: getStatus
+  };
+})();

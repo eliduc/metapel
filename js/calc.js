@@ -125,6 +125,7 @@ window.MetapelCalc = (function () {
       workerFullName: 'Джамшид Эргашев', // ФИО для текста расписок
       employerName: 'Григорий',
       employerFullName: 'Григорий Разумовский', // ФИО работодателя для расписок
+      uiScale: 100, // размер текста, % (115 — крупный, 130 — очень крупный)
       startDate: '2026-06-10',
       passwordHash: hashString('1234'),
       // архив расписок: приватный репозиторий GitHub (Contents API)

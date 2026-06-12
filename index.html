@@ -18,7 +18,6 @@
   <div class="wrap">
     <header>
       <h1 id="hdr-title">Выплаты метапелю</h1>
-      <div id="hdr-sub"></div>
       <div id="hdr-today"></div>
       <button id="btn-settings" title="Настройки (для родственников)">⚙</button>
       <button id="btn-notify" class="btn btn-light" style="display:none">🔔 Включить напоминания на экране</button>
@@ -49,23 +48,26 @@
         </div>
       </div>
       <div class="form-row">
-        <label for="pay-amount">Сколько заплатили, ₪</label>
-        <input type="number" id="pay-amount" min="0" step="any">
-      </div>
-      <div class="form-row">
-        <label for="pay-date">Когда заплатили</label>
-        <input type="date" id="pay-date">
-      </div>
-      <div class="form-row">
         <label>Как оплачено</label>
         <div class="method-toggle">
           <button type="button" class="method-btn" id="pay-method-transfer">🏦 Перевод</button>
           <button type="button" class="method-btn" id="pay-method-cash">💵 Наличные</button>
         </div>
       </div>
+      <button type="button" class="btn-breakdown" id="pay-details-toggle">✎ Поправить сумму или дату</button>
+      <div id="pay-details" style="display:none">
+        <div class="form-row">
+          <label for="pay-amount">Сколько заплатили, ₪</label>
+          <input type="number" id="pay-amount" min="0" step="any">
+        </div>
+        <div class="form-row">
+          <label for="pay-date">Когда заплатили</label>
+          <input type="date" id="pay-date">
+        </div>
+      </div>
       <div class="hint" id="pay-cash-hint" style="display:none">После подтверждения метапель распишется в получении.</div>
       <div class="modal-actions">
-        <button class="btn btn-pay" id="pay-confirm">✓ ДА, ДЕНЬГИ ВЫПЛАЧЕНЫ</button>
+        <button class="btn btn-pay" id="pay-confirm">✓ Да, деньги выплачены</button>
         <button class="btn btn-undo modal-close">Отмена — вернуться назад</button>
       </div>
     </div>
@@ -79,7 +81,7 @@
       <canvas id="sign-canvas"></canvas>
       <div class="hint">Метапель: распишитесь пальцем в рамке выше и нажмите ОК.</div>
       <div class="modal-actions">
-        <button class="btn btn-pay" id="sign-ok">✓ ОК — ДЕНЬГИ ПОЛУЧИЛ</button>
+        <button class="btn btn-pay" id="sign-ok">✓ ОК — деньги получил</button>
         <button class="btn btn-light" id="sign-clear">Стереть и расписаться заново</button>
         <button class="btn btn-undo" id="sign-later">Позже (расписаться потом)</button>
       </div>
@@ -118,7 +120,7 @@
         </div>
       </div>
       <div class="modal-actions">
-        <button class="btn btn-pay" id="extra-confirm">✓ ДЕНЬГИ ВЫДАНЫ</button>
+        <button class="btn btn-pay" id="extra-confirm">✓ Деньги выданы</button>
         <button class="btn btn-undo modal-close">Отмена</button>
       </div>
     </div>
@@ -142,11 +144,26 @@
         <input type="text" id="return-note" placeholder="чеки / сдача наличными">
       </div>
       <div class="modal-actions">
-        <button class="btn btn-pay" id="return-confirm">✓ ПРИНЯТО</button>
+        <button class="btn btn-pay" id="return-confirm">✓ Принято</button>
         <button class="btn btn-undo modal-close">Отмена</button>
       </div>
     </div>
   </div>
+
+  <!-- большое окно подтверждения (вместо системного confirm/alert) -->
+  <div class="modal" id="modal-confirm">
+    <div class="modal-box">
+      <h2 id="confirm-title">Подтверждение</h2>
+      <div class="confirm-text" id="confirm-text"></div>
+      <div class="modal-actions">
+        <button class="btn btn-undo" id="confirm-no">Нет, вернуться назад</button>
+        <button class="btn btn-danger" id="confirm-yes">Да</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- большой тост-подтверждение -->
+  <div id="toast"></div>
 
   <!-- пароль настроек -->
   <div class="modal" id="modal-pass">

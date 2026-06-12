@@ -84,6 +84,55 @@
     return C.generateOccurrences(settings, today(), HORIZON_DAYS);
   }
 
+  // ---------- большие диалоги, тост, защита от двойных касаний ----------
+
+  var confirmCallback = null;
+  var actionLockUntil = 0;
+  var tapShieldUntil = 0;
+
+  // true один раз в 600 мс — гасит дребезг двойного нажатия
+  function actionGuard() {
+    var now = Date.now();
+    if (now < actionLockUntil) return false;
+    actionLockUntil = now + 600;
+    return true;
+  }
+
+  function appConfirm(text, yesLabel, onYes) {
+    confirmCallback = onYes;
+    $('#confirm-title').textContent = 'Подтверждение';
+    $('#confirm-text').textContent = text;
+    var yes = $('#confirm-yes');
+    yes.textContent = yesLabel || 'Да';
+    yes.style.display = '';
+    $('#confirm-no').textContent = 'Нет, вернуться назад';
+    $('#modal-confirm').classList.add('open');
+  }
+
+  function appAlert(text) {
+    confirmCallback = null;
+    $('#confirm-title').textContent = 'Внимание';
+    $('#confirm-text').textContent = text;
+    $('#confirm-yes').style.display = 'none';
+    $('#confirm-no').textContent = 'Понятно';
+    $('#modal-confirm').classList.add('open');
+  }
+
+  // закрывает только окно подтверждения (под ним может быть другое окно)
+  function closeConfirm() {
+    $('#modal-confirm').classList.remove('open');
+    confirmCallback = null;
+  }
+
+  var toastTimer = null;
+  function showToast(text) {
+    var t = $('#toast');
+    t.textContent = text;
+    t.classList.add('show');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2200);
+  }
+
   function withStatus(list) {
     return list.map(function (o) {
       o.status = C.getStatus(o, log, today(), settings);
@@ -93,7 +142,15 @@
 
   // ---------- рендер ----------
 
+  // масштаб текста: настройка пользователя × прибавка для планшета
+  function applyScale() {
+    var tablet = window.matchMedia('(min-width: 768px)').matches ? 1.08 : 1;
+    var scale = (settings.uiScale || 100) / 100;
+    document.body.style.zoom = String(tablet * scale);
+  }
+
   function render() {
+    applyScale();
     var occ = withStatus(occurrences());
     renderHeader();
     renderNav(occ);
@@ -108,8 +165,6 @@
 
   function renderHeader() {
     $('#hdr-title').textContent = 'Выплаты метапелю · ' + settings.workerName;
-    $('#hdr-sub').textContent = 'Работодатель: ' + settings.employerName +
-      ' · работает с ' + C.fmtDate(settings.startDate);
     var d = C.parseISO(today());
     $('#hdr-today').innerHTML = 'Сегодня: <b>' + C.fmtDate(today()) + '</b>' +
       ' (' + C.WEEKDAYS[d.getDay()] + ')' +
@@ -186,7 +241,7 @@
 
     if (withPayBtn) {
       var actions = el('div', 'card-actions');
-      var btn = el('button', 'btn btn-pay', '✓ Я ЗАПЛАТИЛ');
+      var btn = el('button', 'btn btn-pay', '✓ Я заплатил');
       btn.addEventListener('click', function () { openPayModal(o); });
       actions.appendChild(btn);
       div.appendChild(actions);
@@ -231,12 +286,12 @@
       var cardB = el('div', 'balance-card',
         '🧾 На руках у метапеля под отчёт: <b>' + C.fmtMoney(bal) + '</b>' +
         '<div class="hint">Выдано под отчёт минус возвраты (чеки, сдача)</div>');
-      var rbtn = el('button', 'btn btn-return', '➖ ПРИНЯТЬ ОТЧЁТ (чеки / сдача)');
+      var rbtn = el('button', 'btn btn-return', '➖ Принять отчёт (чеки / сдача)');
       rbtn.addEventListener('click', openReturnModal);
       cardB.appendChild(rbtn);
       content.appendChild(cardB);
     }
-    var btn = el('button', 'btn btn-extra', '➕ ВЫДАТЬ ДЕНЬГИ — подарок или под отчёт');
+    var btn = el('button', 'btn btn-extra', '➕ Выдать деньги — подарок или под отчёт');
     btn.addEventListener('click', openExtraModal);
     content.appendChild(btn);
   }
@@ -325,13 +380,15 @@
     head.appendChild(el('div', 'card-amount return-amount', '− ' + C.fmtMoney(r.amount)));
     div.appendChild(head);
     var actions = el('div', 'card-actions');
-    var btn = el('button', 'btn btn-undo', '↩ Отменить (нажали по ошибке)');
+    var btn = el('button', 'link-undo', '↩ Отменить запись (нажали по ошибке)');
     btn.addEventListener('click', function () {
-      if (confirm('Удалить возврат на ' + C.fmtMoney(r.amount) + '? Сумма вернётся в баланс «под отчёт».')) {
-        S.deleteReturn(r.id);
-        reloadData();
-        render();
-      }
+      appConfirm('Удалить возврат на ' + C.fmtMoney(r.amount) + '? Сумма вернётся в баланс «под отчёт».',
+        'Да, удалить', function () {
+          S.deleteReturn(r.id);
+          reloadData();
+          render();
+          showToast('✓ Запись удалена');
+        });
     });
     actions.appendChild(btn);
     div.appendChild(actions);
@@ -367,24 +424,25 @@
     if ((e.method || 'transfer') === 'cash' && !e.signature) {
       var signLabel = e.kind === 'gift'
         ? '✍ Расписаться (по желанию)'
-        : '✍ МЕТАПЕЛЬ ПОЛУЧИЛ — РАСПИСАТЬСЯ';
+        : '✍ Метапель получил — расписаться';
       var btnSign = el('button', 'btn btn-sign', signLabel);
       btnSign.addEventListener('click', function () {
         openSignModal(it.kind === 'scheduled' ? 'log' : 'extra', it.id);
       });
       actions.appendChild(btnSign);
     }
-    var btn = el('button', 'btn btn-undo', '↩ Отменить (нажали по ошибке)');
+    var btn = el('button', 'link-undo', '↩ Отменить запись (нажали по ошибке)');
     btn.addEventListener('click', function () {
       var q = it.kind === 'scheduled'
         ? 'Убрать отметку об оплате «' + e.title + '»? Платёж вернётся в напоминания.'
         : 'Удалить запись «' + e.title + '» на ' + C.fmtMoney(amount) + '?';
-      if (confirm(q)) {
+      appConfirm(q, 'Да, отменить', function () {
         if (it.kind === 'scheduled') S.unmarkPaid(it.id);
         else S.deleteExtra(it.id);
         reloadData();
         render();
-      }
+        showToast('✓ Запись отменена');
+      });
     });
     actions.appendChild(btn);
     div.appendChild(actions);
@@ -410,6 +468,7 @@
     }
     $('#pay-amount').value = o.amount;
     $('#pay-date').value = today();
+    $('#pay-details').style.display = 'none'; // детали — по явному запросу
     payMethod = settings.types[o.type].defaultMethod || 'transfer';
     updateMethodButtons();
     updatePayBig();
@@ -445,10 +504,11 @@
   }
 
   function confirmPay() {
+    if (!actionGuard()) return;
     var amount = parseFloat($('#pay-amount').value);
     var paidDate = $('#pay-date').value;
-    if (isNaN(amount) || amount < 0) { alert('Укажите сумму.'); return; }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(paidDate)) { alert('Укажите дату оплаты.'); return; }
+    if (isNaN(amount) || amount < 0) { appAlert('Укажите сумму.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(paidDate)) { appAlert('Укажите дату оплаты.'); return; }
     var id = currentPay.id;
     var needSign = payMethod === 'cash';
     S.markPaid(id, {
@@ -464,6 +524,7 @@
     log = S.loadLog();
     closeModals();
     render();
+    showToast('✓ Записано');
     if (needSign) openSignModal('log', id); // наличные — сразу расписка
   }
 
@@ -504,12 +565,12 @@
     // внутреннее разрешение по фактическому размеру на экране
     var rect = canvas.getBoundingClientRect();
     canvas.width = Math.max(300, Math.round(rect.width));
-    canvas.height = 240;
+    canvas.height = 300;
     signCtx = canvas.getContext('2d');
     signCtx.fillStyle = '#ffffff';
     signCtx.fillRect(0, 0, canvas.width, canvas.height);
     signCtx.strokeStyle = '#1e293b';
-    signCtx.lineWidth = 3.5;
+    signCtx.lineWidth = 4.5;
     signCtx.lineCap = 'round';
     signCtx.lineJoin = 'round';
     signInk = false;
@@ -526,7 +587,8 @@
   }
 
   function confirmSign() {
-    if (!signInk) { alert('Сначала распишитесь пальцем в рамке.'); return; }
+    if (!actionGuard()) return;
+    if (!signInk) { appAlert('Сначала распишитесь пальцем в рамке.'); return; }
     if (!currentSign) { closeModals(); return; }
     var target = currentSign;
     var r = signRecord(target);
@@ -538,6 +600,7 @@
     reloadData();
     closeModals();
     render();
+    showToast('✓ Расписка записана');
     runSync();
   }
 
@@ -587,10 +650,11 @@
   }
 
   function confirmExtra() {
+    if (!actionGuard()) return;
     var amount = parseFloat($('#extra-amount').value);
     var date = $('#extra-date').value;
-    if (isNaN(amount) || amount <= 0) { alert('Укажите сумму.'); return; }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('Укажите дату.'); return; }
+    if (isNaN(amount) || amount <= 0) { appAlert('Укажите сумму.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { appAlert('Укажите дату.'); return; }
     var rec = {
       id: 'extra-' + Date.now(),
       kind: extraKind,
@@ -606,6 +670,7 @@
     reloadData();
     closeModals();
     render();
+    showToast('✓ Записано');
     // под отчёт наличными — сразу расписка; подарок — по желанию
     if (extraMethod === 'cash' && rec.kind === 'advance') openSignModal('extra', rec.id);
   }
@@ -618,10 +683,11 @@
   }
 
   function confirmReturn() {
+    if (!actionGuard()) return;
     var amount = parseFloat($('#return-amount').value);
     var date = $('#return-date').value;
-    if (isNaN(amount) || amount <= 0) { alert('Укажите сумму.'); return; }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('Укажите дату.'); return; }
+    if (isNaN(amount) || amount <= 0) { appAlert('Укажите сумму.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { appAlert('Укажите дату.'); return; }
     S.addReturn({
       id: 'return-' + Date.now(),
       amount: C.round2(amount),
@@ -631,6 +697,7 @@
     reloadData();
     closeModals();
     render();
+    showToast('✓ Отчёт принят');
   }
 
   // ---------- настройки ----------
@@ -659,7 +726,9 @@
         { path: 'workerFullName', label: 'ФИО работника (для расписок)', type: 'text' },
         { path: 'employerName', label: 'Имя работодателя', type: 'text' },
         { path: 'employerFullName', label: 'ФИО работодателя (для расписок)', type: 'text' },
-        { path: 'startDate', label: 'Дата начала работы', type: 'date' }
+        { path: 'startDate', label: 'Дата начала работы', type: 'date' },
+        { path: 'uiScale', label: 'Размер текста', type: 'select',
+          options: [[100, 'обычный'], [115, 'крупный'], [130, 'очень крупный']] }
       ] },
       { section: '☁ Архив расписок на GitHub', enable: 'sync.enabled',
         hint: 'Подписанные расписки сохраняются файлами в приватный репозиторий GitHub. ' +
@@ -816,11 +885,13 @@
     btnSave.addEventListener('click', function () { saveSettingsForm(form); });
     var btnReset = el('button', 'btn btn-undo', 'Сбросить к значениям по умолчанию');
     btnReset.addEventListener('click', function () {
-      if (confirm('Вернуть все настройки к значениям по умолчанию? История оплат сохранится.')) {
-        S.resetSettings();
-        settings = S.loadSettings();
-        render();
-      }
+      appConfirm('Вернуть все настройки к значениям по умолчанию? История оплат сохранится.',
+        'Да, сбросить', function () {
+          S.resetSettings();
+          settings = S.loadSettings();
+          render();
+          showToast('✓ Настройки сброшены');
+        });
     });
     actions.appendChild(btnSave);
     actions.appendChild(btnReset);
@@ -838,7 +909,7 @@
       else if (kind === 'number') {
         value = parseFloat(inp.value);
         if (isNaN(value)) {
-          alert('Проверьте числовые поля: «' + inp.previousSibling.textContent + '» не число.');
+          appAlert('Проверьте числовые поля: «' + inp.previousSibling.textContent + '» не число.');
           return;
         }
       } else if (kind === 'select') {
@@ -852,14 +923,14 @@
     }
     var p1 = $('#set-pass1').value, p2 = $('#set-pass2').value;
     if (p1 || p2) {
-      if (p1 !== p2) { alert('Пароли не совпадают.'); return; }
-      if (p1.length < 4) { alert('Пароль должен быть не короче 4 символов.'); return; }
+      if (p1 !== p2) { appAlert('Пароли не совпадают.'); return; }
+      if (p1.length < 4) { appAlert('Пароль должен быть не короче 4 символов.'); return; }
       settings.passwordHash = C.hashString(p1);
     }
     S.saveSettings(settings);
     settings = S.loadSettings();
-    alert('Настройки сохранены.');
     render();
+    showToast('✓ Настройки сохранены');
     runSync(); // если включили архив — дослать накопившиеся расписки
   }
 
@@ -910,6 +981,10 @@
     document.querySelectorAll('.modal').forEach(function (m) { m.classList.remove('open'); });
     currentPay = null;
     currentSign = null;
+    confirmCallback = null;
+    // полсекунды игнорируем касания: «дребезг» пальца после закрытия окна
+    // не должен нажать то, что оказалось под ним
+    tapShieldUntil = Date.now() + 500;
   }
 
   function init() {
@@ -933,7 +1008,7 @@
             });
           } catch (e) { /* некоторые браузеры требуют Service Worker — не критично */ }
         } else if (perm === 'denied') {
-          alert('Уведомления запрещены в браузере.\nРазрешите их в настройках сайта (значок замка возле адреса).');
+          appAlert('Уведомления запрещены в браузере. Разрешите их в настройках сайта (значок замка возле адреса).');
         }
         render();
       });
@@ -979,6 +1054,33 @@
     $('#sign-clear').addEventListener('click', setupSignCanvas);
     $('#sign-later').addEventListener('click', closeModals);
 
+    // окно подтверждения
+    $('#confirm-yes').addEventListener('click', function () {
+      if (!actionGuard()) return;
+      var cb = confirmCallback;
+      closeConfirm();
+      tapShieldUntil = Date.now() + 500;
+      if (cb) cb();
+    });
+    $('#confirm-no').addEventListener('click', function () {
+      closeConfirm();
+      tapShieldUntil = Date.now() + 500;
+    });
+
+    // детали оплаты (сумма/дата) — по явному запросу
+    $('#pay-details-toggle').addEventListener('click', function () {
+      var d = $('#pay-details');
+      d.style.display = d.style.display === 'none' ? '' : 'none';
+    });
+
+    // «щит» от двойных касаний: гасим клики 0,5 с после закрытия окон
+    document.addEventListener('click', function (e) {
+      if (Date.now() < tapShieldUntil) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    }, true);
+
     // дополнительные платежи и возвраты
     $('#extra-kind-gift').addEventListener('click', function () {
       extraKind = 'gift';
@@ -1008,7 +1110,15 @@
     });
     document.querySelectorAll('.modal').forEach(function (m) {
       m.addEventListener('click', function (e) {
-        if (e.target === m) closeModals();
+        if (e.target !== m) return;
+        if (m.id === 'modal-confirm') {
+          // окно подтверждения может лежать поверх другого окна —
+          // закрываем только его
+          closeConfirm();
+          tapShieldUntil = Date.now() + 500;
+        } else {
+          closeModals();
+        }
       });
     });
     // если страница остаётся открытой — перерисовка при смене даты
@@ -1019,6 +1129,10 @@
         render();
       }
     }, 60 * 1000);
+    // офлайн-режим: приложение открывается из кэша без интернета
+    if ('serviceWorker' in navigator && location.protocol === 'https:') {
+      navigator.serviceWorker.register('sw.js').catch(function () { /* не критично */ });
+    }
     render();
     runSync(); // дослать расписки, не отправленные в прошлый раз
   }

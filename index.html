@@ -86,6 +86,68 @@
     </div>
   </div>
 
+  <!-- дополнительный платёж: подарок / под отчёт -->
+  <div class="modal" id="modal-extra">
+    <div class="modal-box">
+      <h2>➕ Выдать деньги</h2>
+      <div class="form-row">
+        <label>Что это</label>
+        <div class="method-toggle">
+          <button type="button" class="method-btn" id="extra-kind-gift">🎁 Подарок</button>
+          <button type="button" class="method-btn" id="extra-kind-advance">🧾 Под отчёт</button>
+        </div>
+      </div>
+      <div class="hint" id="extra-kind-hint"></div>
+      <div class="form-row">
+        <label for="extra-amount">Сумма, ₪</label>
+        <input type="number" id="extra-amount" min="0" step="any">
+      </div>
+      <div class="form-row">
+        <label for="extra-date">Дата</label>
+        <input type="date" id="extra-date">
+      </div>
+      <div class="form-row">
+        <label for="extra-note">На что (не обязательно)</label>
+        <input type="text" id="extra-note" placeholder="например: продукты">
+      </div>
+      <div class="form-row">
+        <label>Как оплачено</label>
+        <div class="method-toggle">
+          <button type="button" class="method-btn" id="extra-method-transfer">🏦 Перевод</button>
+          <button type="button" class="method-btn" id="extra-method-cash">💵 Наличные</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-pay" id="extra-confirm">✓ ДЕНЬГИ ВЫДАНЫ</button>
+        <button class="btn btn-undo modal-close">Отмена</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- возврат по отчёту: чеки / сдача -->
+  <div class="modal" id="modal-return">
+    <div class="modal-box">
+      <h2>➖ Принять отчёт</h2>
+      <div class="muted">Метапель отчитывается чеками или возвращает сдачу — сумма спишется с «под отчёт».</div>
+      <div class="form-row">
+        <label for="return-amount">Сумма, ₪</label>
+        <input type="number" id="return-amount" min="0" step="any">
+      </div>
+      <div class="form-row">
+        <label for="return-date">Дата</label>
+        <input type="date" id="return-date">
+      </div>
+      <div class="form-row">
+        <label for="return-note">Чем отчитался</label>
+        <input type="text" id="return-note" placeholder="чеки / сдача наличными">
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-pay" id="return-confirm">✓ ПРИНЯТО</button>
+        <button class="btn btn-undo modal-close">Отмена</button>
+      </div>
+    </div>
+  </div>
+
   <!-- пароль настроек -->
   <div class="modal" id="modal-pass">
     <div class="modal-box">
@@ -106,6 +168,7 @@
 
   <script src="js/calc.js"></script>
   <script src="js/storage.js"></script>
+  <script src="js/sync.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

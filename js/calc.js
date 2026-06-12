@@ -122,9 +122,12 @@ window.MetapelCalc = (function () {
   function defaultSettings() {
     return {
       workerName: 'Джамшид',
+      workerFullName: 'Джамшид Эргашев', // ФИО для текста расписок
       employerName: 'Григорий',
       startDate: '2026-06-10',
       passwordHash: hashString('1234'),
+      // архив расписок: приватный репозиторий GitHub (Contents API)
+      sync: { enabled: false, repo: 'eliduc/metapel-data', token: '' },
       types: {
         salary: {
           enabled: true, label: 'Зарплата',

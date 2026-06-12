@@ -156,6 +156,11 @@
     eq('Зарплата по умолчанию — перевод', defaults().types.salary.defaultMethod, 'transfer');
     eq('Пикадон по умолчанию — перевод', defaults().types.pikadon.defaultMethod, 'transfer');
 
+    // ---------- ФИО и архив ----------
+    eq('ФИО для расписок по умолчанию', defaults().workerFullName, 'Джамшид Эргашев');
+    eq('Архив расписок по умолчанию выключен', defaults().sync.enabled, false);
+    eq('Репозиторий архива по умолчанию', defaults().sync.repo, 'eliduc/metapel-data');
+
     // ---------- пароль ----------
     eq('Хэш пароля стабилен', C.hashString('1234') === C.hashString('1234'), true);
     eq('Хэш разных паролей различается', C.hashString('1234') !== C.hashString('1235'), true);

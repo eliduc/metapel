@@ -462,6 +462,44 @@ nav {
 
 .btn-sign:hover { background: #1e40af; }
 
+/* дополнительные платежи и баланс «под отчёт» */
+
+.btn-extra {
+  background: var(--card-bg);
+  border: 2px dashed var(--accent);
+  color: var(--accent);
+  width: 100%;
+  font-weight: 700;
+  margin: 10px 0 2px;
+}
+
+.btn-extra:hover { background: #eff6ff; }
+
+.balance-card {
+  background: #fefce8;
+  border: 3px solid var(--amber);
+  border-radius: 16px;
+  padding: 14px 18px;
+  margin: 10px 0;
+  font-size: 21px;
+}
+
+.balance-card .btn { margin-top: 10px; }
+
+.btn-return {
+  background: var(--amber);
+  color: #fff;
+  width: 100%;
+}
+
+.btn-return:hover { background: #92400e; }
+
+.return-card { border-left-color: var(--amber) !important; }
+
+.return-amount { color: var(--amber); }
+
+.sync-badge { font-size: 17px; color: var(--muted); margin-top: 4px; }
+
 .error { color: var(--red); font-size: 19px; margin-top: 8px; font-weight: 600; }
 
 .hint { color: var(--muted); font-size: 17px; margin-top: 8px; }

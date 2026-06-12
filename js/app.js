@@ -22,11 +22,21 @@
 
   var settings = S.loadSettings();
   var log = S.loadLog();
+  var extras = S.loadExtras();   // доп. платежи: подарки / под отчёт
+  var returns = S.loadReturns(); // возвраты по отчёту (чеки, сдача)
   var activeTab = 'due';
   var settingsUnlocked = false;
-  var currentPay = null;      // вхождение в диалоге оплаты
-  var payMethod = 'transfer'; // выбранный способ в диалоге оплаты
-  var currentSignId = null;   // id записи, под которой ставится подпись
+  var currentPay = null;       // вхождение в диалоге оплаты
+  var payMethod = 'transfer';  // выбранный способ в диалоге оплаты
+  var currentSign = null;      // {type:'log'|'extra', id} — чья подпись ставится
+  var extraKind = 'gift';      // тип в диалоге доп. платежа
+  var extraMethod = 'cash';    // способ в диалоге доп. платежа
+
+  function reloadData() {
+    log = S.loadLog();
+    extras = S.loadExtras();
+    returns = S.loadReturns();
+  }
 
   var HORIZON_DAYS = 60;
 
@@ -89,7 +99,7 @@
     renderNav(occ);
     var content = $('#content');
     content.innerHTML = '';
-    if (activeTab === 'due') renderDue(occ, content);
+    if (activeTab === 'due') { renderDue(occ, content); extrasBlock(content); }
     else if (activeTab === 'upcoming') renderUpcoming(occ, content);
     else if (activeTab === 'history') renderHistory(content);
     else if (activeTab === 'settings') renderSettings(content);
@@ -206,6 +216,31 @@
     due.forEach(function (o) { content.appendChild(card(o, true)); });
   }
 
+  // блок «выдать деньги» + баланс «под отчёт» (на вкладке «Платить»)
+  function advanceBalance() {
+    var given = extras.reduce(function (s, e) {
+      return e.kind === 'advance' ? s + e.amount : s;
+    }, 0);
+    var back = returns.reduce(function (s, r) { return s + r.amount; }, 0);
+    return C.round2(given - back);
+  }
+
+  function extrasBlock(content) {
+    var bal = advanceBalance();
+    if (bal !== 0) {
+      var cardB = el('div', 'balance-card',
+        '🧾 На руках у метапеля под отчёт: <b>' + C.fmtMoney(bal) + '</b>' +
+        '<div class="hint">Выдано под отчёт минус возвраты (чеки, сдача)</div>');
+      var rbtn = el('button', 'btn btn-return', '➖ ПРИНЯТЬ ОТЧЁТ (чеки / сдача)');
+      rbtn.addEventListener('click', openReturnModal);
+      cardB.appendChild(rbtn);
+      content.appendChild(cardB);
+    }
+    var btn = el('button', 'btn btn-extra', '➕ ВЫДАТЬ ДЕНЬГИ — подарок или под отчёт');
+    btn.addEventListener('click', openExtraModal);
+    content.appendChild(btn);
+  }
+
   function renderUpcoming(occ, content) {
     var up = occ.filter(function (o) { return o.status === 'upcoming'; });
     var unpaid = occ.filter(function (o) { return o.status !== 'paid'; });
@@ -219,67 +254,141 @@
     up.forEach(function (o) { content.appendChild(card(o, true)); });
   }
 
+  // бейдж способа оплаты + статус расписки и архива
+  function methodBadge(rec) {
+    var line;
+    if ((rec.method || 'transfer') === 'cash') {
+      line = rec.signature
+        ? '💵 Наличные · ✍ Расписка получена ✓'
+        : (rec.kind === 'gift'
+          ? '💵 Наличные · без расписки (для подарка не обязательна)'
+          : '💵 Наличные · <span class="no-receipt">⚠ Нет расписки</span>');
+    } else {
+      line = '🏦 Перевод';
+    }
+    if (rec.signature && window.MetapelSync.isOn(settings)) {
+      line += rec.synced
+        ? '<div class="sync-badge">☁ Сохранена в архиве GitHub</div>'
+        : '<div class="sync-badge">⏳ Ждёт отправки в архив</div>';
+    }
+    return line;
+  }
+
   function renderHistory(content) {
-    var ids = Object.keys(log);
-    if (!ids.length) {
+    var items = [];
+    Object.keys(log).forEach(function (id) {
+      var r = log[id];
+      items.push({ kind: 'scheduled', id: id, rec: r, date: r.paidDate });
+    });
+    extras.forEach(function (e) {
+      items.push({ kind: 'extra', id: e.id, rec: e, date: e.date });
+    });
+    returns.forEach(function (r) {
+      items.push({ kind: 'return', id: r.id, rec: r, date: r.date });
+    });
+    if (!items.length) {
       content.appendChild(el('div', 'empty', 'Оплаченных платежей пока нет.'));
       return;
     }
-    var entries = ids.map(function (id) {
-      var r = log[id];
-      return {
-        id: id, title: r.title, dueDate: r.dueDate, paidDate: r.paidDate,
-        amount: r.paidAmount, method: r.method || 'transfer',
-        signature: r.signature || null
-      };
-    }).sort(function (a, b) {
-      return a.paidDate < b.paidDate ? 1 : a.paidDate > b.paidDate ? -1 :
-        (a.dueDate < b.dueDate ? 1 : -1);
-    });
+    items.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+
+    var paidTotal = items.reduce(function (s, it) {
+      if (it.kind === 'scheduled') return s + it.rec.paidAmount;
+      if (it.kind === 'extra') return s + it.rec.amount;
+      return s;
+    }, 0);
+    var returnedTotal = returns.reduce(function (s, r) { return s + r.amount; }, 0);
     content.appendChild(el('div', 'summary',
-      'Всего выплачено: <b>' + C.fmtMoney(entries.reduce(function (s, e) { return s + e.amount; }, 0)) +
-      '</b> · записей: ' + entries.length));
-    entries.forEach(function (e) {
-      var div = el('div', 'card paid-card');
-      var head = el('div', 'card-head');
-      var left = el('div', 'card-left');
-      left.appendChild(el('div', 'card-title', esc(e.title)));
-      left.appendChild(el('div', 'card-due',
-        'оплачено ' + C.fmtDate(e.paidDate) + (e.dueDate ? ' · срок был ' + C.fmtDate(e.dueDate) : '')));
-      if (e.method === 'cash') {
-        left.appendChild(el('div', 'method-badge', e.signature
-          ? '💵 Наличные · ✍ Расписка получена ✓'
-          : '💵 Наличные · <span class="no-receipt">⚠ Нет расписки</span>'));
+      'Всего выплачено: <b>' + C.fmtMoney(paidTotal) + '</b>' +
+      (returnedTotal ? ' · возвращено по отчётам: <b>' + C.fmtMoney(returnedTotal) + '</b>' : '') +
+      ' · записей: ' + items.length));
+
+    items.forEach(function (it) {
+      if (it.kind === 'return') {
+        content.appendChild(returnCard(it.rec));
       } else {
-        left.appendChild(el('div', 'method-badge', '🏦 Перевод'));
+        content.appendChild(historyCard(it));
       }
-      head.appendChild(left);
-      head.appendChild(el('div', 'card-amount', C.fmtMoney(e.amount)));
-      div.appendChild(head);
-      if (e.signature) {
-        var img = el('img', 'sig-img');
-        img.src = e.signature;
-        img.alt = 'Подпись метапеля';
-        div.appendChild(img);
-      }
-      var actions = el('div', 'card-actions');
-      if (e.method === 'cash' && !e.signature) {
-        var btnSign = el('button', 'btn btn-sign', '✍ МЕТАПЕЛЬ ПОЛУЧИЛ — РАСПИСАТЬСЯ');
-        btnSign.addEventListener('click', function () { openSignModal(e.id); });
-        actions.appendChild(btnSign);
-      }
-      var btn = el('button', 'btn btn-undo', '↩ Отменить (нажали по ошибке)');
-      btn.addEventListener('click', function () {
-        if (confirm('Убрать отметку об оплате «' + e.title + '»? Платёж вернётся в напоминания.')) {
-          S.unmarkPaid(e.id);
-          log = S.loadLog();
-          render();
-        }
-      });
-      actions.appendChild(btn);
-      div.appendChild(actions);
-      content.appendChild(div);
     });
+  }
+
+  function returnCard(r) {
+    var div = el('div', 'card paid-card return-card');
+    var head = el('div', 'card-head');
+    var left = el('div', 'card-left');
+    var title = el('div', 'card-title');
+    title.appendChild(el('span', 'card-icon', '↩'));
+    title.appendChild(el('span', null, 'Возврат по отчёту' + (r.note ? ': ' + esc(r.note) : '')));
+    left.appendChild(title);
+    left.appendChild(el('div', 'card-due', C.fmtDate(r.date)));
+    head.appendChild(left);
+    head.appendChild(el('div', 'card-amount return-amount', '− ' + C.fmtMoney(r.amount)));
+    div.appendChild(head);
+    var actions = el('div', 'card-actions');
+    var btn = el('button', 'btn btn-undo', '↩ Отменить (нажали по ошибке)');
+    btn.addEventListener('click', function () {
+      if (confirm('Удалить возврат на ' + C.fmtMoney(r.amount) + '? Сумма вернётся в баланс «под отчёт».')) {
+        S.deleteReturn(r.id);
+        reloadData();
+        render();
+      }
+    });
+    actions.appendChild(btn);
+    div.appendChild(actions);
+    return div;
+  }
+
+  function historyCard(it) {
+    var e = it.rec;
+    var amount = it.kind === 'scheduled' ? e.paidAmount : e.amount;
+    var div = el('div', 'card paid-card');
+    var head = el('div', 'card-head');
+    var left = el('div', 'card-left');
+    var title = el('div', 'card-title');
+    var icon = it.kind === 'extra' ? (e.kind === 'gift' ? '🎁' : '🧾')
+      : (TYPE_ICONS[it.id.replace(/-.*$/, '')] || '💵');
+    title.appendChild(el('span', 'card-icon', icon));
+    title.appendChild(el('span', null, esc(e.title) + (e.note ? ' — ' + esc(e.note) : '')));
+    left.appendChild(title);
+    left.appendChild(el('div', 'card-due', it.kind === 'scheduled'
+      ? 'оплачено ' + C.fmtDate(e.paidDate) + (e.dueDate ? ' · срок был ' + C.fmtDate(e.dueDate) : '')
+      : 'выдано ' + C.fmtDate(e.date)));
+    left.appendChild(el('div', 'method-badge', methodBadge(e)));
+    head.appendChild(left);
+    head.appendChild(el('div', 'card-amount', C.fmtMoney(amount)));
+    div.appendChild(head);
+    if (e.signature) {
+      var img = el('img', 'sig-img');
+      img.src = e.signature;
+      img.alt = 'Подпись метапеля';
+      div.appendChild(img);
+    }
+    var actions = el('div', 'card-actions');
+    if ((e.method || 'transfer') === 'cash' && !e.signature) {
+      var signLabel = e.kind === 'gift'
+        ? '✍ Расписаться (по желанию)'
+        : '✍ МЕТАПЕЛЬ ПОЛУЧИЛ — РАСПИСАТЬСЯ';
+      var btnSign = el('button', 'btn btn-sign', signLabel);
+      btnSign.addEventListener('click', function () {
+        openSignModal(it.kind === 'scheduled' ? 'log' : 'extra', it.id);
+      });
+      actions.appendChild(btnSign);
+    }
+    var btn = el('button', 'btn btn-undo', '↩ Отменить (нажали по ошибке)');
+    btn.addEventListener('click', function () {
+      var q = it.kind === 'scheduled'
+        ? 'Убрать отметку об оплате «' + e.title + '»? Платёж вернётся в напоминания.'
+        : 'Удалить запись «' + e.title + '» на ' + C.fmtMoney(amount) + '?';
+      if (confirm(q)) {
+        if (it.kind === 'scheduled') S.unmarkPaid(it.id);
+        else S.deleteExtra(it.id);
+        reloadData();
+        render();
+      }
+    });
+    actions.appendChild(btn);
+    div.appendChild(actions);
+    return div;
   }
 
   // ---------- диалог оплаты ----------
@@ -355,7 +464,7 @@
     log = S.loadLog();
     closeModals();
     render();
-    if (needSign) openSignModal(id); // наличные — сразу расписка
+    if (needSign) openSignModal('log', id); // наличные — сразу расписка
   }
 
   // ---------- расписка (подпись пальцем) ----------
@@ -364,14 +473,28 @@
   var signDrawing = false;
   var signInk = false;
 
-  function openSignModal(id) {
-    var r = log[id];
+  function findExtra(id) {
+    for (var i = 0; i < extras.length; i++) if (extras[i].id === id) return extras[i];
+    return null;
+  }
+
+  function signRecord(target) {
+    return target.type === 'log' ? log[target.id] : findExtra(target.id);
+  }
+
+  function openSignModal(targetType, id) {
+    var target = { type: targetType, id: id };
+    var r = signRecord(target);
     if (!r) return;
-    currentSignId = id;
-    $('#sign-text').innerHTML = 'Я, <b>' + esc(settings.workerName) + '</b>, получил наличными <b>' +
-      C.fmtMoney(r.paidAmount) + '</b><br>' + esc(r.title) +
+    currentSign = target;
+    var what = 'наличными'; // обычный платёж
+    if (r.kind === 'gift') what = 'в подарок';
+    if (r.kind === 'advance') what = 'под отчёт';
+    $('#sign-text').innerHTML = 'Я, <b>' + esc(settings.workerFullName || settings.workerName) +
+      '</b>, получил ' + what + ' <b>' + C.fmtMoney(r.paidAmount != null ? r.paidAmount : r.amount) +
+      '</b><br>' + esc(r.title) + (r.note ? ' (' + esc(r.note) + ')' : '') +
       ' · от: ' + esc(settings.employerName) +
-      ' · дата: ' + C.fmtDate(r.paidDate);
+      ' · дата: ' + C.fmtDate(r.paidDate || r.date);
     $('#modal-sign').classList.add('open');
     setupSignCanvas();
   }
@@ -404,12 +527,100 @@
 
   function confirmSign() {
     if (!signInk) { alert('Сначала распишитесь пальцем в рамке.'); return; }
-    var r = log[currentSignId];
+    if (!currentSign) { closeModals(); return; }
+    var target = currentSign;
+    var r = signRecord(target);
     if (!r) { closeModals(); return; }
     r.signature = $('#sign-canvas').toDataURL('image/png');
     r.signedDate = today();
-    S.markPaid(currentSignId, r);
-    log = S.loadLog();
+    var kind = target.type === 'log' ? target.id.replace(/-.*$/, '') : r.kind;
+    if (target.type === 'log') S.markPaid(target.id, r);
+    else S.updateExtra(target.id, r);
+    if (window.MetapelSync.isOn(settings)) {
+      window.MetapelSync.enqueue(S, target.type, target.id, kind, r, settings);
+    }
+    reloadData();
+    closeModals();
+    render();
+    runSync();
+  }
+
+  // досылка очереди расписок в архив GitHub
+  function runSync() {
+    if (!window.MetapelSync.isOn(settings)) return;
+    window.MetapelSync.processQueue(settings, S, null).then(function (sent) {
+      if (sent > 0) {
+        reloadData();
+        render();
+      }
+    });
+  }
+
+  // ---------- дополнительные платежи (подарок / под отчёт) ----------
+
+  function openExtraModal() {
+    extraKind = 'gift';
+    extraMethod = 'cash'; // доп. платежи по умолчанию наличными
+    $('#extra-amount').value = '';
+    $('#extra-date').value = today();
+    $('#extra-note').value = '';
+    updateExtraButtons();
+    $('#modal-extra').classList.add('open');
+  }
+
+  function updateExtraButtons() {
+    $('#extra-kind-gift').classList.toggle('active', extraKind === 'gift');
+    $('#extra-kind-advance').classList.toggle('active', extraKind === 'advance');
+    $('#extra-method-transfer').classList.toggle('active', extraMethod === 'transfer');
+    $('#extra-method-cash').classList.toggle('active', extraMethod === 'cash');
+    $('#extra-kind-hint').textContent = extraKind === 'gift'
+      ? 'Подарок: отчёт не нужен, расписка по желанию (кнопка будет в «Оплачено»).'
+      : 'Под отчёт: метапель отчитывается чеками или сдачей, сумма попадает в баланс.';
+  }
+
+  function confirmExtra() {
+    var amount = parseFloat($('#extra-amount').value);
+    var date = $('#extra-date').value;
+    if (isNaN(amount) || amount <= 0) { alert('Укажите сумму.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('Укажите дату.'); return; }
+    var rec = {
+      id: 'extra-' + Date.now(),
+      kind: extraKind,
+      title: extraKind === 'gift' ? 'Подарок' : 'Деньги под отчёт',
+      amount: C.round2(amount),
+      date: date,
+      note: $('#extra-note').value.trim(),
+      method: extraMethod,
+      signature: null,
+      signedDate: null
+    };
+    S.addExtra(rec);
+    reloadData();
+    closeModals();
+    render();
+    // под отчёт наличными — сразу расписка; подарок — по желанию
+    if (extraMethod === 'cash' && rec.kind === 'advance') openSignModal('extra', rec.id);
+  }
+
+  function openReturnModal() {
+    $('#return-amount').value = '';
+    $('#return-date').value = today();
+    $('#return-note').value = '';
+    $('#modal-return').classList.add('open');
+  }
+
+  function confirmReturn() {
+    var amount = parseFloat($('#return-amount').value);
+    var date = $('#return-date').value;
+    if (isNaN(amount) || amount <= 0) { alert('Укажите сумму.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('Укажите дату.'); return; }
+    S.addReturn({
+      id: 'return-' + Date.now(),
+      amount: C.round2(amount),
+      date: date,
+      note: $('#return-note').value.trim()
+    });
+    reloadData();
     closeModals();
     render();
   }
@@ -428,8 +639,18 @@
     return [
       { section: 'Общие', fields: [
         { path: 'workerName', label: 'Имя работника', type: 'text' },
+        { path: 'workerFullName', label: 'ФИО работника (для расписок)', type: 'text' },
         { path: 'employerName', label: 'Имя работодателя', type: 'text' },
         { path: 'startDate', label: 'Дата начала работы', type: 'date' }
+      ] },
+      { section: '☁ Архив расписок на GitHub', enable: 'sync.enabled',
+        hint: 'Подписанные расписки сохраняются файлами в приватный репозиторий GitHub. ' +
+          'Токен: github.com → Settings → Developer settings → Fine-grained tokens; ' +
+          'доступ только к репозиторию данных, право Contents: Read and write. ' +
+          'Токен хранится только на этом устройстве.',
+        fields: [
+        { path: 'sync.repo', label: 'Репозиторий (владелец/имя)', type: 'text' },
+        { path: 'sync.token', label: 'Токен доступа', type: 'password' }
       ] },
       { section: 'Зарплата', enable: 'types.salary.enabled', fields: [
         { path: 'types.salary.net', label: 'Нетто в месяц, ₪', type: 'number' },
@@ -547,6 +768,7 @@
         row.appendChild(input);
         fs.appendChild(row);
       });
+      if (sec.hint) fs.appendChild(el('div', 'hint', esc(sec.hint)));
       form.appendChild(fs);
     });
 
@@ -619,6 +841,7 @@
     settings = S.loadSettings();
     alert('Настройки сохранены.');
     render();
+    runSync(); // если включили архив — дослать накопившиеся расписки
   }
 
   // ---------- пароль ----------
@@ -667,7 +890,7 @@
   function closeModals() {
     document.querySelectorAll('.modal').forEach(function (m) { m.classList.remove('open'); });
     currentPay = null;
-    currentSignId = null;
+    currentSign = null;
   }
 
   function init() {
@@ -736,6 +959,26 @@
     $('#sign-ok').addEventListener('click', confirmSign);
     $('#sign-clear').addEventListener('click', setupSignCanvas);
     $('#sign-later').addEventListener('click', closeModals);
+
+    // дополнительные платежи и возвраты
+    $('#extra-kind-gift').addEventListener('click', function () {
+      extraKind = 'gift';
+      updateExtraButtons();
+    });
+    $('#extra-kind-advance').addEventListener('click', function () {
+      extraKind = 'advance';
+      updateExtraButtons();
+    });
+    $('#extra-method-transfer').addEventListener('click', function () {
+      extraMethod = 'transfer';
+      updateExtraButtons();
+    });
+    $('#extra-method-cash').addEventListener('click', function () {
+      extraMethod = 'cash';
+      updateExtraButtons();
+    });
+    $('#extra-confirm').addEventListener('click', confirmExtra);
+    $('#return-confirm').addEventListener('click', confirmReturn);
     $('#pay-confirm').addEventListener('click', confirmPay);
     $('#pass-confirm').addEventListener('click', checkPassword);
     $('#pass-input').addEventListener('keydown', function (e) {
@@ -758,6 +1001,7 @@
       }
     }, 60 * 1000);
     render();
+    runSync(); // дослать расписки, не отправленные в прошлый раз
   }
 
   document.addEventListener('DOMContentLoaded', init);

@@ -190,6 +190,22 @@
     eq('Зарплата при этом всё равно с зачётом',
       find(noSocList, 'salary-2026-07').amount, 1994);
 
+    // ---------- калькулятор окончания работы ----------
+    eq('monthsBetween: ровно 18 месяцев', C.monthsBetween('2026-06-10', '2027-12-10'), 18);
+    var fin = C.calcFinalSettlement(noBl(), '2027-12-10', 'employer', 0);
+    eq('Финал: зарплата за 10 дней декабря + 1 суббота', fin.breakdown[0].amount, 2536.77);
+    eq('Финал: доплата до полного пособия (8,33%×18 мес − 6%×12 мес)', fin.breakdown[1].amount, 5022.34);
+    eq('Финал: отпуск 21 день × 258', fin.breakdown[2].amount, 5418);
+    eq('Финал: хавраа за полгода 2-го года (6×418×50%)', fin.breakdown[3].amount, 1254);
+    eq('Финал: пикадон за 10/31 последнего месяца', fin.breakdown[4].amount, 259.83);
+    eq('Финал: итого при увольнении работодателем', fin.total, 14490.94);
+    var finW = C.calcFinalSettlement(noBl(), '2027-12-10', 'worker', 0);
+    eq('Финал: при уходе по собственному желанию доплаты нет', finW.breakdown[1].amount, 0);
+    eq('Финал: итого при уходе по собственному желанию', finW.total, 9468.6);
+    var finEarly = C.calcFinalSettlement(noBl(), '2026-12-09', 'employer', 0);
+    eq('Финал: стаж меньше года — есть предупреждение',
+      finEarly.warnings.join(' ').indexOf('меньше года') >= 0, true);
+
     // ---------- отключение типа ----------
     var sOff = noBl();
     sOff.types.pocket.enabled = false;

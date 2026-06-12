@@ -151,6 +151,34 @@
     </div>
   </div>
 
+  <!-- калькулятор окончания работы (для родственников, из настроек) -->
+  <div class="modal" id="modal-final">
+    <div class="modal-box">
+      <h2>🧮 Окончание работы — расчёт</h2>
+      <div class="muted">Ориентировочный финальный расчёт по разделу 6 памятки.</div>
+      <div class="form-row">
+        <label for="final-date">Последний день работы</label>
+        <input type="date" id="final-date">
+      </div>
+      <div class="form-row">
+        <label>Причина</label>
+        <div class="method-toggle">
+          <button type="button" class="method-btn" id="final-reason-employer">Увольняет работодатель</button>
+          <button type="button" class="method-btn" id="final-reason-worker">Уходит сам</button>
+        </div>
+      </div>
+      <div class="form-row">
+        <label for="final-vacation-used">Использовано дней отпуска</label>
+        <input type="number" id="final-vacation-used" min="0" step="1" value="0">
+      </div>
+      <button class="btn btn-pay" id="final-calc">Посчитать</button>
+      <div id="final-result"></div>
+      <div class="modal-actions">
+        <button class="btn btn-undo modal-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
   <!-- большое окно подтверждения (вместо системного confirm/alert) -->
   <div class="modal" id="modal-confirm">
     <div class="modal-box">

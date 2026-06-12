@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '1.5 от 12.06.2026';
+  var APP_VERSION = '1.6 от 12.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -761,6 +761,45 @@
     if (extraMethod === 'cash' && rec.kind === 'advance') openSignModal('extra', rec.id);
   }
 
+  // ---------- калькулятор окончания работы ----------
+
+  var finalReason = 'employer';
+
+  function openFinalModal() {
+    finalReason = 'employer';
+    $('#final-date').value = today();
+    $('#final-vacation-used').value = '0';
+    $('#final-result').innerHTML = '';
+    updateFinalButtons();
+    $('#modal-final').classList.add('open');
+    updateScrollLock();
+  }
+
+  function updateFinalButtons() {
+    $('#final-reason-employer').classList.toggle('active', finalReason === 'employer');
+    $('#final-reason-worker').classList.toggle('active', finalReason === 'worker');
+  }
+
+  function runFinalCalc() {
+    var endDate = $('#final-date').value;
+    var used = parseInt($('#final-vacation-used').value, 10) || 0;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) { appAlert('Укажите последний день работы.'); return; }
+    var res = C.calcFinalSettlement(settings, endDate, finalReason, used);
+    var box = $('#final-result');
+    box.innerHTML = '';
+    if (res.breakdown.length) {
+      var ul = el('ul', 'breakdown-body open');
+      res.breakdown.forEach(function (l) {
+        ul.appendChild(el('li', null, esc(l.text) + ' — <b>' + C.fmtMoney(l.amount) + '</b>'));
+      });
+      box.appendChild(ul);
+      box.appendChild(el('div', 'pay-amount-big', 'Итого: ' + C.fmtMoney(res.total)));
+    }
+    res.warnings.forEach(function (w) {
+      box.appendChild(el('div', 'hint', '⚠ ' + esc(w)));
+    });
+  }
+
   function openReturnModal() {
     $('#return-amount').value = '';
     $('#return-date').value = today();
@@ -834,6 +873,13 @@
         { path: 'bl.hoursPerWeek', label: 'Часов в неделю от Битуах Леуми', type: 'number' },
         { path: 'bl.hourValueMonth', label: 'Стоимость недельного часа, ₪ в месяц', type: 'number' },
         { path: 'bl.applyToSocial', label: 'Уменьшать также взносы, пикадон и хавраа', type: 'checkbox' }
+      ] },
+      { section: '🧮 Окончание работы (для калькулятора)',
+        hint: 'Параметры финального расчёта из раздела 6 памятки. Сам калькулятор — кнопка внизу настроек.',
+        fields: [
+        { path: 'final.severanceFullPercent', label: 'Полное выходное пособие, % в месяц', type: 'number' },
+        { path: 'final.vacationDaysPerYear', label: 'Дней отпуска в год', type: 'number' },
+        { path: 'final.vacationDayRate', label: 'Компенсация за день отпуска, ₪', type: 'number' }
       ] },
       { section: '☁ Архив расписок на GitHub', enable: 'sync.enabled',
         hint: 'Подписанные расписки сохраняются файлами в приватный репозиторий GitHub. ' +
@@ -1016,6 +1062,9 @@
     });
     actions.appendChild(btnSave);
     actions.appendChild(btnReset);
+    var btnFinal = el('button', 'btn btn-light', '🧮 Калькулятор окончания работы');
+    btnFinal.addEventListener('click', openFinalModal);
+    actions.appendChild(btnFinal);
     if (window.MetapelSync.isOn(settings)) {
       var btnRestore = el('button', 'btn btn-light', '⟳ Восстановить данные из архива GitHub');
       btnRestore.addEventListener('click', function () {
@@ -1248,6 +1297,17 @@
     });
     $('#extra-confirm').addEventListener('click', confirmExtra);
     $('#return-confirm').addEventListener('click', confirmReturn);
+
+    // калькулятор окончания работы
+    $('#final-reason-employer').addEventListener('click', function () {
+      finalReason = 'employer';
+      updateFinalButtons();
+    });
+    $('#final-reason-worker').addEventListener('click', function () {
+      finalReason = 'worker';
+      updateFinalButtons();
+    });
+    $('#final-calc').addEventListener('click', runFinalCalc);
     $('#pay-confirm').addEventListener('click', confirmPay);
     $('#pass-confirm').addEventListener('click', checkPassword);
     $('#pass-input').addEventListener('keydown', function (e) {

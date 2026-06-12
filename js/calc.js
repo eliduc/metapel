@@ -137,6 +137,12 @@ window.MetapelCalc = (function () {
         hourValueMonth: 241,
         applyToSocial: true // уменьшать также взносы, пикадон и хавраа
       },
+      // параметры калькулятора окончания работы (раздел 6 памятки)
+      final: {
+        severanceFullPercent: 8.33, // полное выходное пособие, %/мес от базы
+        vacationDaysPerYear: 14,    // дней отпуска в год (первые 5 лет)
+        vacationDayRate: 258        // компенсация за день отпуска, ₪
+      },
       startDate: '2026-06-10',
       passwordHash: hashString('1234'),
       // архив расписок: приватный репозиторий GitHub (Contents API)
@@ -571,6 +577,128 @@ window.MetapelCalc = (function () {
     return out;
   }
 
+  // ---------- калькулятор окончания работы ----------
+
+  // месяцев между датами, с дробной частью (день ≈ 1/30 месяца)
+  function monthsBetween(aISO, bISO) {
+    if (bISO < aISO) return 0;
+    var a = parseISO(aISO), b = parseISO(bISO);
+    var months = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+    months += (b.getDate() - a.getDate()) / 30;
+    return Math.max(0, round2(months));
+  }
+
+  /**
+   * Финальный расчёт при окончании трудоустройства (раздел 6 памятки).
+   * reason: 'employer' (увольняет работодатель) | 'worker' (уходит сам).
+   * Возвращает { breakdown: [{text, amount}], total, warnings: [] }.
+   */
+  function calcFinalSettlement(settings, endISO, reason, usedVacationDays) {
+    var t = settings.types;
+    var fin = settings.final || {};
+    var start = settings.startDate;
+    var used = usedVacationDays || 0;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(endISO) || endISO < start) {
+      return { breakdown: [], total: 0,
+        warnings: ['Дата окончания раньше даты начала работы — проверьте дату.'] };
+    }
+    var lines = [];
+    var warnings = [];
+    var blOff = blMonthlyOffset(settings);
+    var blSoc = blSocialOffset(settings);
+    var famShare = (settings.bl && settings.bl.enabled && settings.bl.applyToSocial)
+      ? blFamilyShare(settings) : 1;
+    var base = Math.max(0, round2(t.pikadon.grossBase - blSoc));
+    var months = monthsBetween(start, endISO);
+
+    // 1. зарплата за последний неполный месяц (+ шабат по календарю)
+    var e = parseISO(endISO);
+    var y = e.getFullYear(), m = e.getMonth() + 1, endDay = e.getDate();
+    var dim = daysInMonth(y, m);
+    var s0 = parseISO(start);
+    var fromDay = (y === s0.getFullYear() && m === s0.getMonth() + 1) ? s0.getDate() : 1;
+    var workedDays = endDay - fromDay + 1;
+    var netPart = round2(t.salary.net * workedDays / dim);
+    var offPart = round2(blOff * workedDays / dim);
+    var famNet = Math.max(0, round2(netPart - offPart));
+    var sats = countSaturdays(y, m, fromDay, endDay);
+    var lastSalary = round2(famNet + sats * t.salary.shabbatRate);
+    lines.push({
+      text: 'Зарплата за ' + monthLabel(y, m) + ' по ' + endDay + '-е (' + workedDays +
+        ' дн.' + (offPart > 0 ? ', с зачётом часов БЛ −' + fmtMoney(offPart) : '') +
+        ') + шабат: ' + sats + ' ' + satWord(sats) + ' × ' + fmtMoney(t.salary.shabbatRate),
+      amount: lastSalary
+    });
+
+    // 2. выходное пособие
+    var pikStart = addMonthsISO(start, t.pikadon.fromMonth - 1);
+    if (reason === 'employer') {
+      var fullPct = fin.severanceFullPercent || 8.33;
+      var full = round2(base * fullPct / 100 * months);
+      var pikMonths = monthsBetween(pikStart, endISO);
+      var deposited = round2(base * t.pikadon.severancePercent / 100 * pikMonths);
+      var doplata = Math.max(0, round2(full - deposited));
+      lines.push({
+        text: 'Доплата до полного выходного пособия: ' + fmtPct(fullPct) + ' × ' +
+          fmtMoney(base) + ' × ' + String(months).replace('.', ',') + ' мес = ' + fmtMoney(full) +
+          ' − накоплено в пикадоне (' + fmtPct(t.pikadon.severancePercent) + ' × ' +
+          String(pikMonths).replace('.', ',') + ' мес) ' + fmtMoney(deposited),
+        amount: doplata
+      });
+      if (months < 12) {
+        warnings.push('Стаж меньше года: право на выходное пособие обычно возникает после года работы — уточните у специалиста.');
+      }
+    } else {
+      lines.push({
+        text: 'Уход по собственному желанию: компенсация ' + fmtPct(t.pikadon.severancePercent) +
+          ' уже накоплена в пикадоне — доплата не требуется',
+        amount: 0
+      });
+    }
+
+    // 3. неиспользованный отпуск
+    var vacPerYear = fin.vacationDaysPerYear || 14;
+    var vacRate = fin.vacationDayRate || 258;
+    var accrued = round2(vacPerYear * months / 12);
+    var remaining = Math.max(0, round2(accrued - used));
+    var vacAmount = round2(remaining * vacRate * famShare);
+    lines.push({
+      text: 'Неиспользованный отпуск: накоплено ' + String(accrued).replace('.', ',') +
+        ' − использовано ' + used + ' = ' + String(remaining).replace('.', ',') + ' дн. × ' +
+        fmtMoney(vacRate) + (famShare < 1 ? ' × доля семьи' : ''),
+      amount: vacAmount
+    });
+
+    // 4. хавраа за неполный последний год
+    var yearsFull = Math.floor(months / 12);
+    var frac = round2((months - yearsFull * 12) / 12 * 100) / 100;
+    if (frac > 0) {
+      var tier = havraaTier(t.havraa, yearsFull + 1);
+      var hav = round2(tier.days * t.havraa.dayRate * frac * famShare);
+      lines.push({
+        text: 'Хавраа за неполный ' + (yearsFull + 1) + '-й год: ' + tier.days + ' дн. × ' +
+          fmtMoney(t.havraa.dayRate) + ' × ' + String(round2(frac * 100)).replace('.', ',') + '%' +
+          (famShare < 1 ? ' × доля семьи' : ''),
+        amount: hav
+      });
+    }
+
+    // 5. пикадон за последний неполный месяц
+    if (base > 0 && monthsBetween(pikStart, endISO) > 0) {
+      var pikPct = t.pikadon.pensionPercent + t.pikadon.severancePercent;
+      var pikPart = round2(base * pikPct / 100 * workedDays / dim);
+      lines.push({
+        text: 'Пикадон за последний месяц: ' + fmtPct(round2(pikPct)) + ' × ' + fmtMoney(base) +
+          ' × ' + workedDays + '/' + dim + ' дн. (внести в депозит до закрытия)',
+        amount: pikPart
+      });
+    }
+
+    var total = round2(lines.reduce(function (sum, l) { return sum + l.amount; }, 0));
+    warnings.push('Расчёт ориентировочный (т.л.х.): перед окончательным расчётом сверьтесь со специалистом. Не забудьте закрыть депозит «пикадон» и «тик масиким» в Битуах Леуми.');
+    return { breakdown: lines, total: total, warnings: warnings };
+  }
+
   /**
    * Статус вхождения:
    *  paid     — есть отметка об оплате;
@@ -611,6 +739,8 @@ window.MetapelCalc = (function () {
     defaultSettings: defaultSettings,
     blMonthlyOffset: blMonthlyOffset,
     blFamilyShare: blFamilyShare,
+    monthsBetween: monthsBetween,
+    calcFinalSettlement: calcFinalSettlement,
     generateOccurrences: generateOccurrences,
     getStatus: getStatus
   };

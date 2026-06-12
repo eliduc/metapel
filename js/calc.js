@@ -286,12 +286,18 @@ window.MetapelCalc = (function () {
 
   function bituachMonthly(t) { return round2(t.grossBase * t.ratePercent / 100); }
 
-  function genBituach(t, start, end, out) {
+  // При переключении частоты месяц/квартал оплаченные записи другого
+  // режима остаются в журнале — учитываем их, чтобы не требовать
+  // повторной оплаты тех же месяцев.
+  function genBituach(t, start, end, out, paidLog) {
+    paidLog = paidLog || {};
     if (t.frequency === 'quarterly') {
-      genBituachQuarterly(t, start, end, out);
+      genBituachQuarterly(t, start, end, out, paidLog);
       return;
     }
     eachWorkedMonth(start, end, function (y, m, fromDay) {
+      var q = Math.floor((m - 1) / 3) + 1;
+      if (paidLog['bituach-' + y + '-Q' + q]) return; // месяц покрыт оплаченным кварталом
       var due = nextMonthDue(y, m, t.dayOfMonth);
       if (due > end) return;
       var dim = daysInMonth(y, m);
@@ -315,9 +321,11 @@ window.MetapelCalc = (function () {
     });
   }
 
-  function genBituachQuarterly(t, start, end, out) {
+  function genBituachQuarterly(t, start, end, out, paidLog) {
+    paidLog = paidLog || {};
     var months = {}; // 'y-m' -> {y, m, amount}
     eachWorkedMonth(start, end, function (y, m, fromDay) {
+      if (paidLog['bituach-' + y + '-' + pad2(m)]) return; // месяц уже оплачен помесячно
       var dim = daysInMonth(y, m);
       var workedDays = dim - fromDay + 1;
       var full = bituachMonthly(t);
@@ -433,8 +441,10 @@ window.MetapelCalc = (function () {
    * Генерирует все вхождения платежей от даты начала работы
    * до today + horizonDays. Прошлые неоплаченные остаются видимыми
    * (статус overdue — напоминание каждый день).
+   * paidLog (опционально) — журнал оплат: нужен Битуах Леуми, чтобы
+   * при смене частоты месяц/квартал не требовать оплаченное повторно.
    */
-  function generateOccurrences(settings, todayISO, horizonDays) {
+  function generateOccurrences(settings, todayISO, horizonDays, paidLog) {
     if (horizonDays == null) horizonDays = 60;
     var end = addDays(todayISO, horizonDays);
     var start = settings.startDate;
@@ -444,7 +454,7 @@ window.MetapelCalc = (function () {
       if (t.salary.enabled) genSalary(t.salary, start, end, out);
       if (t.pocket.enabled) genPocket(t.pocket, start, end, out);
       if (t.insurance.enabled) genInsurance(t.insurance, start, end, out);
-      if (t.bituach.enabled) genBituach(t.bituach, start, end, out);
+      if (t.bituach.enabled) genBituach(t.bituach, start, end, out, paidLog);
       if (t.pikadon.enabled) genPikadon(t.pikadon, start, end, out);
       if (t.havraa.enabled) genHavraa(t.havraa, start, end, out);
       if (t.visa.enabled) {

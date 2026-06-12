@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '1.3 от 12.06.2026';
+  var APP_VERSION = '1.4 от 12.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -39,6 +39,9 @@
   function unlockSettings() {
     var ttl = settings.passwordTtlMinutes;
     if (ttl == null || isNaN(ttl) || ttl < 0) ttl = 10;
+    // ttl=0 запер бы настройки навсегда (пароль «протухал» бы мгновенно) —
+    // минимум одна минута, чтобы успеть войти
+    if (ttl < 1) ttl = 1;
     S.setMeta('settingsUnlockUntil', Date.now() + ttl * 60 * 1000);
   }
   var currentPay = null;       // вхождение в диалоге оплаты
@@ -96,7 +99,9 @@
   }
 
   function occurrences() {
-    return C.generateOccurrences(settings, today(), HORIZON_DAYS);
+    // журнал нужен движку: Битуах Леуми не должен требовать повторной
+    // оплаты месяцев при переключении частоты месяц/квартал
+    return C.generateOccurrences(settings, today(), HORIZON_DAYS, log);
   }
 
   // ---------- большие диалоги, тост, защита от двойных касаний ----------
@@ -122,6 +127,7 @@
     yes.style.display = '';
     $('#confirm-no').textContent = 'Нет, вернуться назад';
     $('#modal-confirm').classList.add('open');
+    updateScrollLock();
   }
 
   function appAlert(text) {
@@ -131,12 +137,14 @@
     $('#confirm-yes').style.display = 'none';
     $('#confirm-no').textContent = 'Понятно';
     $('#modal-confirm').classList.add('open');
+    updateScrollLock();
   }
 
   // закрывает только окно подтверждения (под ним может быть другое окно)
   function closeConfirm() {
     $('#modal-confirm').classList.remove('open');
     confirmCallback = null;
+    updateScrollLock();
   }
 
   var toastTimer = null;
@@ -146,6 +154,50 @@
     t.classList.add('show');
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2200);
+  }
+
+  // блокировка прокрутки фона, пока открыто любое окно (iOS-совместимая)
+  var savedScrollY = 0;
+  function updateScrollLock() {
+    var anyOpen = !!document.querySelector('.modal.open');
+    var locked = document.body.style.position === 'fixed';
+    if (anyOpen && !locked) {
+      savedScrollY = window.scrollY || 0;
+      document.body.style.position = 'fixed';
+      document.body.style.top = -savedScrollY + 'px';
+      document.body.style.left = '0';
+      document.body.style.right = '0';
+    } else if (!anyOpen && locked) {
+      document.body.style.position = '';
+      document.body.style.top = '';
+      document.body.style.left = '';
+      document.body.style.right = '';
+      window.scrollTo(0, savedScrollY);
+    }
+  }
+
+  // фоновая перерисовка (после синхронизации, в полночь): не должна
+  // стирать недозаполненную форму настроек или открытое окно
+  function backgroundRender() {
+    if (activeTab === 'settings') return;
+    if (document.querySelector('.modal.open')) return;
+    render();
+  }
+
+  // системное уведомление: iOS поддерживает только показ через service
+  // worker, обычный new Notification() там бросает исключение
+  function showSystemNotification(title, options) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.ready.then(function (reg) {
+        if (reg.showNotification) reg.showNotification(title, options);
+        else new Notification(title, options);
+      }).catch(function () {
+        try { new Notification(title, options); } catch (e) { /* нет поддержки */ }
+      });
+    } else {
+      try { new Notification(title, options); } catch (e) { /* нет поддержки */ }
+    }
   }
 
   function withStatus(list) {
@@ -327,9 +379,10 @@
 
   // бейдж способа оплаты + статус расписки и архива
   function methodBadge(rec) {
+    var hasReceipt = rec.signature || rec.signatureArchived;
     var line;
     if ((rec.method || 'transfer') === 'cash') {
-      line = rec.signature
+      line = hasReceipt
         ? '💵 Наличные · ✍ Расписка получена ✓'
         : (rec.kind === 'gift'
           ? '💵 Наличные · без расписки (для подарка не обязательна)'
@@ -337,7 +390,7 @@
     } else {
       line = '🏦 Перевод';
     }
-    if (rec.signature && window.MetapelSync.isOn(settings)) {
+    if (hasReceipt && window.MetapelSync.isOn(settings)) {
       line += rec.synced
         ? '<div class="sync-badge">☁ Сохранена в архиве GitHub</div>'
         : '<div class="sync-badge">⏳ Ждёт отправки в архив</div>';
@@ -437,7 +490,7 @@
       div.appendChild(img);
     }
     var actions = el('div', 'card-actions');
-    if ((e.method || 'transfer') === 'cash' && !e.signature) {
+    if ((e.method || 'transfer') === 'cash' && !e.signature && !e.signatureArchived) {
       var signLabel = e.kind === 'gift'
         ? '✍ Расписаться (по желанию)'
         : '✍ Метапель получил — расписаться';
@@ -452,6 +505,9 @@
       var q = it.kind === 'scheduled'
         ? 'Убрать отметку об оплате «' + e.title + '»? Платёж вернётся в напоминания.'
         : 'Удалить запись «' + e.title + '» на ' + C.fmtMoney(amount) + '?';
+      if (it.kind === 'extra' && e.kind === 'advance' && advanceBalance() - e.amount < 0) {
+        q += ' Внимание: по «под отчёт» уже приняты возвраты — баланс уйдёт в минус.';
+      }
       appConfirm(q, 'Да, отменить', function () {
         if (it.kind === 'scheduled') S.unmarkPaid(it.id);
         else S.deleteExtra(it.id);
@@ -489,6 +545,7 @@
     updateMethodButtons();
     updatePayBig();
     $('#modal-pay').classList.add('open');
+    updateScrollLock();
   }
 
   function updateMethodButtons() {
@@ -573,6 +630,7 @@
       ' · от: ' + esc(settings.employerFullName || settings.employerName) +
       ' · дата: ' + C.fmtDate(r.paidDate || r.date);
     $('#modal-sign').classList.add('open');
+    updateScrollLock();
     setupSignCanvas();
   }
 
@@ -621,9 +679,15 @@
   }
 
   // Ставит в очередь все подписанные, но ещё не отправленные расписки
-  // (в т.ч. подписанные до включения архива) и отправляет очередь.
+  // (в т.ч. подписанные до включения архива), отправляет очередь и
+  // обновляет резервную копию данных. Параллельные запуски запрещены —
+  // иначе дубль-отправки и гонка sha на GitHub.
+  var syncInFlight = false;
+
   function runSync() {
+    if (syncInFlight) return;
     if (!window.MetapelSync.isOn(settings)) return;
+    syncInFlight = true;
     Object.keys(log).forEach(function (id) {
       var r = log[id];
       if (r.signature && !r.synced) {
@@ -636,10 +700,15 @@
       }
     });
     window.MetapelSync.processQueue(settings, S, null).then(function (sent) {
-      if (sent > 0) {
-        reloadData();
-        render();
-      }
+      return window.MetapelSync.backupIfChanged(settings, S, C.hashString).then(function (backedUp) {
+        syncInFlight = false;
+        if (sent > 0 || backedUp) {
+          reloadData();
+          backgroundRender();
+        }
+      });
+    }).catch(function () {
+      syncInFlight = false;
     });
   }
 
@@ -653,6 +722,7 @@
     $('#extra-note').value = '';
     updateExtraButtons();
     $('#modal-extra').classList.add('open');
+    updateScrollLock();
   }
 
   function updateExtraButtons() {
@@ -696,6 +766,7 @@
     $('#return-date').value = today();
     $('#return-note').value = '';
     $('#modal-return').classList.add('open');
+    updateScrollLock();
   }
 
   function confirmReturn() {
@@ -704,6 +775,12 @@
     var date = $('#return-date').value;
     if (isNaN(amount) || amount <= 0) { appAlert('Укажите сумму.'); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { appAlert('Укажите дату.'); return; }
+    var bal = advanceBalance();
+    if (amount > bal) {
+      appAlert('Сейчас под отчёт числится ' + C.fmtMoney(bal) +
+        ' — нельзя принять возврат на большую сумму.');
+      return;
+    }
     S.addReturn({
       id: 'return-' + Date.now(),
       amount: C.round2(amount),
@@ -860,6 +937,18 @@
             input.appendChild(o);
           });
           input.value = getPath(settings, f.path);
+          if (input.selectedIndex === -1) {
+            // сохранённое значение из старой версии не входит в список —
+            // берём ближайшую опцию, иначе select «пустой» и при сохранении
+            // значение молча обнулилось бы
+            var cur = parseFloat(getPath(settings, f.path));
+            var best = 0, bestD = Infinity;
+            f.options.forEach(function (opt, i) {
+              var d = Math.abs(parseFloat(opt[0]) - cur);
+              if (!isNaN(d) && d < bestD) { bestD = d; best = i; }
+            });
+            input.selectedIndex = best;
+          }
         } else {
           input = el('input');
           input.type = f.type;
@@ -912,11 +1001,39 @@
     });
     actions.appendChild(btnSave);
     actions.appendChild(btnReset);
+    if (window.MetapelSync.isOn(settings)) {
+      var btnRestore = el('button', 'btn btn-light', '⟳ Восстановить данные из архива GitHub');
+      btnRestore.addEventListener('click', function () {
+        appConfirm('Заменить данные на этом устройстве резервной копией из архива GitHub? ' +
+          'Текущие записи будут перезаписаны.', 'Да, восстановить', function () {
+          window.MetapelSync.fetchBackup(settings).then(function (data) {
+            data.settings = data.settings || {};
+            data.settings.sync = settings.sync; // токен этого устройства сохраняем
+            S.saveSettings(data.settings);
+            S.replaceData({
+              log: data.log || {},
+              extras: data.extras || [],
+              returns: data.returns || []
+            });
+            settings = S.loadSettings();
+            reloadData();
+            render();
+            showToast('✓ Данные восстановлены');
+          }).catch(function (e) {
+            appAlert('Не получилось восстановить: ' + (e && e.message || e));
+          });
+        });
+      });
+      actions.appendChild(btnRestore);
+    }
     form.appendChild(actions);
     content.appendChild(form);
   }
 
   function saveSettingsForm(form) {
+    // все значения собираем в черновик: если валидация прервёт сохранение,
+    // рабочие настройки не должны остаться «полуизменёнными» в памяти
+    var draft = JSON.parse(JSON.stringify(settings));
     var inputs = form.querySelectorAll('[data-path]');
     for (var i = 0; i < inputs.length; i++) {
       var inp = inputs[i];
@@ -931,20 +1048,21 @@
         }
       } else if (kind === 'select') {
         value = inp.value;
+        if (value === '') continue; // нет выбранной опции — оставить старое значение
         if (/^\d+$/.test(value)) value = parseInt(value, 10);
       } else {
         // лишние пробелы при вставке (особенно токена) ломают доступ
         value = inp.value.trim();
       }
-      setPath(settings, inp.dataset.path, value);
+      setPath(draft, inp.dataset.path, value);
     }
     var p1 = $('#set-pass1').value, p2 = $('#set-pass2').value;
     if (p1 || p2) {
       if (p1 !== p2) { appAlert('Пароли не совпадают.'); return; }
       if (p1.length < 4) { appAlert('Пароль должен быть не короче 4 символов.'); return; }
-      settings.passwordHash = C.hashString(p1);
+      draft.passwordHash = C.hashString(p1);
     }
-    S.saveSettings(settings);
+    S.saveSettings(draft);
     settings = S.loadSettings();
     render();
     showToast('✓ Настройки сохранены');
@@ -959,6 +1077,7 @@
     $('#pass-hint').style.display =
       settings.passwordHash === C.hashString('1234') ? '' : 'none';
     $('#modal-pass').classList.add('open');
+    updateScrollLock();
     setTimeout(function () { $('#pass-input').focus(); }, 50);
   }
 
@@ -981,15 +1100,13 @@
     if (!due.length) return;
     var t = realToday(); // уведомление — раз в реальный день
     if (S.getMeta('lastNotify') === t) return;
-    try {
-      new Notification('Выплаты метапелю — ' + settings.workerName, {
-        body: 'Требуют внимания: ' + due.length + ' ' +
-          C.plural(due.length, 'платёж', 'платежа', 'платежей') +
-          ' на ' + C.fmtMoney(due.reduce(function (s, o) { return s + o.amount; }, 0)),
-        tag: 'metapel-daily'
-      });
-      S.setMeta('lastNotify', t);
-    } catch (e) { /* file:// или браузер без поддержки — игнорируем */ }
+    S.setMeta('lastNotify', t);
+    showSystemNotification('Выплаты метапелю — ' + settings.workerName, {
+      body: 'Требуют внимания: ' + due.length + ' ' +
+        C.plural(due.length, 'платёж', 'платежа', 'платежей') +
+        ' на ' + C.fmtMoney(due.reduce(function (s, o) { return s + o.amount; }, 0)),
+      tag: 'metapel-daily'
+    });
   }
 
   // ---------- модальные окна и события ----------
@@ -999,6 +1116,7 @@
     currentPay = null;
     currentSign = null;
     confirmCallback = null;
+    updateScrollLock();
     // полсекунды игнорируем касания: «дребезг» пальца после закрытия окна
     // не должен нажать то, что оказалось под ним
     tapShieldUntil = Date.now() + 500;
@@ -1018,13 +1136,12 @@
     $('#btn-notify').addEventListener('click', function () {
       Notification.requestPermission().then(function (perm) {
         if (perm === 'granted') {
-          try {
-            new Notification('Напоминания включены ✓', {
-              body: 'Когда подойдёт срок платежа, появится такое уведомление.'
-            });
-          } catch (e) { /* некоторые браузеры требуют Service Worker — не критично */ }
+          showSystemNotification('Напоминания включены ✓', {
+            body: 'Когда подойдёт срок платежа, появится такое уведомление.'
+          });
         } else if (perm === 'denied') {
-          appAlert('Уведомления запрещены в браузере. Разрешите их в настройках сайта (значок замка возле адреса).');
+          appAlert('Уведомления запрещены. На компьютере: значок замка возле адреса. ' +
+            'На iPad: Настройки → Уведомления → Выплаты.');
         }
         render();
       });
@@ -1124,25 +1241,14 @@
     document.querySelectorAll('.modal-close').forEach(function (b) {
       b.addEventListener('click', closeModals);
     });
-    document.querySelectorAll('.modal').forEach(function (m) {
-      m.addEventListener('click', function (e) {
-        if (e.target !== m) return;
-        if (m.id === 'modal-confirm') {
-          // окно подтверждения может лежать поверх другого окна —
-          // закрываем только его
-          closeConfirm();
-          tapShieldUntil = Date.now() + 500;
-        } else {
-          closeModals();
-        }
-      });
-    });
+    // Касание тёмного фона окна НЕ закрывает: при слабой моторике ладонь
+    // рядом с окном сбрасывала бы ввод. Закрытие — только явными кнопками.
     // если страница остаётся открытой — перерисовка при смене даты
     var lastDay = realToday();
     setInterval(function () {
       if (realToday() !== lastDay) {
         lastDay = realToday();
-        render();
+        backgroundRender(); // не стирать открытое окно или форму настроек
       }
     }, 60 * 1000);
     $('#app-version').textContent = 'Версия ' + APP_VERSION;
@@ -1150,6 +1256,15 @@
     if ('serviceWorker' in navigator && location.protocol === 'https:') {
       navigator.serviceWorker.register('sw.js').catch(function () { /* не критично */ });
     }
+    // просим браузер не выселять данные при нехватке места
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().catch(function () { /* не критично */ });
+    }
+    // переполнение хранилища не должно проходить молча
+    S.setOnSaveError(function () {
+      appAlert('Память устройства для приложения заполнена — последняя запись могла не сохраниться. ' +
+        'Проверьте «Оплачено» и сообщите родственникам.');
+    });
     render();
     runSync(); // дослать расписки, не отправленные в прошлый раз
   }

@@ -101,6 +101,23 @@
     eq('Битуах Леуми 3-й квартал: срок 20.10', q3 && q3.dueDate, '2026-10-20');
     eq('При квартальной частоте помесячных вхождений нет', find(q, 'bituach-2026-07'), null);
 
+    // ---------- переключение частоты Битуах Леуми не теряет оплат ----------
+    var sqSwitch = defaults();
+    sqSwitch.types.bituach.frequency = 'quarterly';
+    var paidJune = { 'bituach-2026-06': { paidDate: '2026-07-08' } };
+    eq('Квартал не требует месяц, уже оплаченный помесячно (Q2 исчезает)',
+      find(C.generateOccurrences(sqSwitch, '2026-10-01', 30, paidJune), 'bituach-2026-Q2'), null);
+    var paidJuly = { 'bituach-2026-07': { paidDate: '2026-08-08' } };
+    var q3sw = find(C.generateOccurrences(sqSwitch, '2026-10-01', 30, paidJuly), 'bituach-2026-Q3');
+    eq('Из Q3 исключён оплаченный помесячно июль (сумма за 2 месяца)',
+      q3sw && q3sw.amount, 463.96);
+    var paidQ3 = { 'bituach-2026-Q3': { paidDate: '2026-10-20' } };
+    var backMonthly = C.generateOccurrences(defaults(), '2026-10-01', 30, paidQ3);
+    eq('Помесячный июль скрыт, если оплачен квартал Q3',
+      find(backMonthly, 'bituach-2026-07'), null);
+    eq('Июнь (Q2) при оплаченном Q3 остаётся',
+      find(backMonthly, 'bituach-2026-06') !== null, true);
+
     // ---------- пикадон ----------
     eq('Пикадона за ноябрь 2026 нет (раньше 7-го месяца)',
       find(occs('2026-12-01'), 'pikadon-2026-11'), null);

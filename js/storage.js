@@ -16,8 +16,37 @@ window.MetapelStore = (function () {
     }
   }
 
+  var onSaveError = null;
+  function setOnSaveError(cb) { onSaveError = cb; }
+
+  // При нехватке места освобождаем хранилище: картинки подписей,
+  // уже сохранённые в архиве GitHub, заменяем пометкой signatureArchived.
+  function pruneArchivedSignatures(data) {
+    var freed = false;
+    function prune(rec) {
+      if (rec && rec.synced && rec.signature) {
+        rec.signature = null;
+        rec.signatureArchived = true;
+        freed = true;
+      }
+    }
+    Object.keys(data.log || {}).forEach(function (id) { prune(data.log[id]); });
+    (data.extras || []).forEach(prune);
+    return freed;
+  }
+
   function saveRaw(data) {
-    localStorage.setItem(KEY, JSON.stringify(data));
+    try {
+      localStorage.setItem(KEY, JSON.stringify(data));
+    } catch (e) {
+      if (pruneArchivedSignatures(data)) {
+        try {
+          localStorage.setItem(KEY, JSON.stringify(data));
+          return;
+        } catch (e2) { /* места всё ещё нет */ }
+      }
+      if (onSaveError) onSaveError(e);
+    }
   }
 
   // Объекты сливаются рекурсивно, массивы и примитивы заменяются целиком.
@@ -66,6 +95,8 @@ window.MetapelStore = (function () {
     var raw = loadRaw();
     if (raw.log) {
       delete raw.log[id];
+      // расписка отменённого платежа не должна уехать в архив
+      raw.syncQueue = (raw.syncQueue || []).filter(function (q) { return q.id !== id; });
       saveRaw(raw);
     }
   }
@@ -102,6 +133,7 @@ window.MetapelStore = (function () {
   function deleteExtra(id) {
     var raw = loadRaw();
     raw.extras = (raw.extras || []).filter(function (e) { return e.id !== id; });
+    raw.syncQueue = (raw.syncQueue || []).filter(function (q) { return q.id !== id; });
     saveRaw(raw);
   }
 
@@ -156,10 +188,21 @@ window.MetapelStore = (function () {
     saveRaw(raw);
   }
 
+  // восстановление из резервной копии
+  function replaceData(parts) {
+    var raw = loadRaw();
+    if (parts.log) raw.log = parts.log;
+    if (parts.extras) raw.extras = parts.extras;
+    if (parts.returns) raw.returns = parts.returns;
+    saveRaw(raw);
+  }
+
   return {
     loadSettings: loadSettings,
     saveSettings: saveSettings,
     resetSettings: resetSettings,
+    setOnSaveError: setOnSaveError,
+    replaceData: replaceData,
     loadLog: loadLog,
     markPaid: markPaid,
     unmarkPaid: unmarkPaid,

@@ -110,15 +110,65 @@ window.MetapelSync = (function () {
         });
       });
     });
-    return chain.then(function () { return sent; }).catch(function (e) {
+    return chain.then(function () {
+      // очередь успешно опустела — старые ошибки больше не актуальны
+      store.setMeta('lastSyncError', null);
+      return sent;
+    }).catch(function (e) {
       store.setMeta('lastSyncError', String(e && e.message || e));
       return sent;
+    });
+  }
+
+  // ---------- резервная копия всех данных ----------
+
+  function buildBackupJson(settings, store) {
+    var cleanSettings = JSON.parse(JSON.stringify(settings));
+    if (cleanSettings.sync) cleanSettings.sync.token = ''; // токен не покидает устройство
+    return JSON.stringify({
+      kind: 'metapel-backup',
+      settings: cleanSettings,
+      log: store.loadLog(),
+      extras: store.loadExtras(),
+      returns: store.loadReturns()
+    }, null, 2);
+  }
+
+  // загружает backup/data.json в архив, если данные изменились
+  function backupIfChanged(settings, store, hashFn) {
+    if (!isOn(settings)) return Promise.resolve(false);
+    var json = buildBackupJson(settings, store);
+    var h = hashFn(json);
+    if (store.getMeta('lastBackupHash') === h) return Promise.resolve(false);
+    return putFile(conf(settings), 'backup/data.json', json, 'Data backup').then(function () {
+      store.setMeta('lastBackupHash', h);
+      return true;
+    }).catch(function (e) {
+      store.setMeta('lastSyncError', String(e && e.message || e));
+      return false;
+    });
+  }
+
+  function fetchBackup(settings) {
+    var c = conf(settings);
+    var url = 'https://api.github.com/repos/' + c.repo + '/contents/backup/data.json';
+    return fetch(url, { headers: headers(c) }).then(function (r) {
+      if (r.status === 404) throw new Error('Резервной копии в архиве ещё нет.');
+      if (!r.ok) throw new Error('GitHub ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      var jsonStr = decodeURIComponent(escape(atob(String(j.content || '').replace(/\s/g, ''))));
+      var data = JSON.parse(jsonStr);
+      if (data.kind !== 'metapel-backup') throw new Error('Файл резервной копии повреждён.');
+      return data;
     });
   }
 
   return {
     isOn: isOn,
     enqueue: enqueue,
-    processQueue: processQueue
+    processQueue: processQueue,
+    backupIfChanged: backupIfChanged,
+    fetchBackup: fetchBackup
   };
 })();

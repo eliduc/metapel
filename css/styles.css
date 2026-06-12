@@ -551,6 +551,13 @@ nav {
   cursor: pointer;
 }
 
+#app-version {
+  text-align: center;
+  color: #94a3b8;
+  font-size: 15px;
+  margin-top: 28px;
+}
+
 .error { color: var(--red); font-size: 19px; margin-top: 8px; font-weight: 600; }
 
 .hint { color: var(--muted); font-size: 17px; margin-top: 8px; }

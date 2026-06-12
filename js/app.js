@@ -9,6 +9,10 @@
   var C = window.MetapelCalc;
   var S = window.MetapelStore;
 
+  // Поднимать при каждой публикации — по этой надписи внизу страницы
+  // видно, что загрузилась новая версия, а не кэш.
+  var APP_VERSION = '1.1 от 12.06.2026';
+
   // ---------- «сегодня» ----------
 
   var params = new URLSearchParams(location.search);
@@ -1129,6 +1133,7 @@
         render();
       }
     }, 60 * 1000);
+    $('#app-version').textContent = 'Версия ' + APP_VERSION;
     // офлайн-режим: приложение открывается из кэша без интернета
     if ('serviceWorker' in navigator && location.protocol === 'https:') {
       navigator.serviceWorker.register('sw.js').catch(function () { /* не критично */ });

@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '1.6 от 12.06.2026';
+  var APP_VERSION = '1.7 от 12.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -214,7 +214,12 @@
     var tablet = window.matchMedia('(min-width: 768px)').matches ? 1.08 : 1;
     // 125 — потолок: «очень крупный» из старых настроек (130) тоже ужимается
     var scale = Math.min(settings.uiScale || 100, 125) / 100;
-    document.body.style.zoom = String(tablet * scale);
+    var zoom = tablet * scale;
+    document.body.style.zoom = String(zoom);
+    // vh внутри zoom «растягивается» — пересчитываем потолок окон в пикселях,
+    // иначе при крупном шрифте низ окна (кнопка «Закрыть») уходит за экран
+    document.documentElement.style.setProperty('--modal-max',
+      Math.round(window.innerHeight / zoom * 0.92) + 'px');
   }
 
   function render() {
@@ -875,7 +880,7 @@
         { path: 'bl.applyToSocial', label: 'Уменьшать также взносы, пикадон и хавраа', type: 'checkbox' }
       ] },
       { section: '🧮 Окончание работы (для калькулятора)',
-        hint: 'Параметры финального расчёта из раздела 6 памятки. Сам калькулятор — кнопка внизу настроек.',
+        hint: 'Параметры финального расчёта из раздела 6 памятки. Сам калькулятор — кнопка 🧮 вверху экрана.',
         fields: [
         { path: 'final.severanceFullPercent', label: 'Полное выходное пособие, % в месяц', type: 'number' },
         { path: 'final.vacationDaysPerYear', label: 'Дней отпуска в год', type: 'number' },
@@ -1062,9 +1067,6 @@
     });
     actions.appendChild(btnSave);
     actions.appendChild(btnReset);
-    var btnFinal = el('button', 'btn btn-light', '🧮 Калькулятор окончания работы');
-    btnFinal.addEventListener('click', openFinalModal);
-    actions.appendChild(btnFinal);
     if (window.MetapelSync.isOn(settings)) {
       var btnRestore = el('button', 'btn btn-light', '⟳ Восстановить данные из архива GitHub');
       btnRestore.addEventListener('click', function () {
@@ -1197,6 +1199,8 @@
       activeTab = 'settings';
       render();
     });
+    $('#btn-final').addEventListener('click', openFinalModal);
+    window.addEventListener('resize', applyScale);
     $('#btn-notify').addEventListener('click', function () {
       Notification.requestPermission().then(function (perm) {
         if (perm === 'granted') {

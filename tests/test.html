@@ -151,6 +151,11 @@
     eq('Отключённый тип не генерируется',
       occs('2026-06-12', 60, sOff).filter(function (o) { return o.type === 'pocket'; }).length, 0);
 
+    // ---------- способ оплаты по умолчанию ----------
+    eq('Карманные по умолчанию — наличные', defaults().types.pocket.defaultMethod, 'cash');
+    eq('Зарплата по умолчанию — перевод', defaults().types.salary.defaultMethod, 'transfer');
+    eq('Пикадон по умолчанию — перевод', defaults().types.pikadon.defaultMethod, 'transfer');
+
     // ---------- пароль ----------
     eq('Хэш пароля стабилен', C.hashString('1234') === C.hashString('1234'), true);
     eq('Хэш разных паролей различается', C.hashString('1234') !== C.hashString('1235'), true);

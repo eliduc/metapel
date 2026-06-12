@@ -128,25 +128,30 @@ window.MetapelCalc = (function () {
       types: {
         salary: {
           enabled: true, label: 'Зарплата',
-          net: 6500, shabbatRate: 440, dayOfMonth: 8, noticeDays: 3
+          net: 6500, shabbatRate: 440, dayOfMonth: 8, noticeDays: 3,
+          defaultMethod: 'transfer'
         },
         pocket: {
           enabled: true, label: 'Карманные (дмей кис)',
-          amount: 100, weekday: 0, noticeDays: 1
+          amount: 100, weekday: 0, noticeDays: 1,
+          defaultMethod: 'cash'
         },
         insurance: {
           enabled: true, label: 'Мед. страховка',
-          amount: 300, dayOfMonth: 8, noticeDays: 3
+          amount: 300, dayOfMonth: 8, noticeDays: 3,
+          defaultMethod: 'transfer'
         },
         bituach: {
           enabled: true, label: 'Битуах Леуми',
           ratePercent: 3.6, grossBase: 6443.85,
-          frequency: 'monthly', dayOfMonth: 8, quarterDay: 20, noticeDays: 5
+          frequency: 'monthly', dayOfMonth: 8, quarterDay: 20, noticeDays: 5,
+          defaultMethod: 'transfer'
         },
         pikadon: {
           enabled: true, label: 'Пикадон (пенсия + компенсация)',
           pensionPercent: 6.5, severancePercent: 6, grossBase: 6443.85,
-          fromMonth: 7, dayOfMonth: 8, noticeDays: 5
+          fromMonth: 7, dayOfMonth: 8, noticeDays: 5,
+          defaultMethod: 'transfer'
         },
         havraa: {
           enabled: true, label: 'Дмей хавраа',
@@ -157,19 +162,23 @@ window.MetapelCalc = (function () {
             { from: 4, to: 10, days: 7 },
             { from: 11, to: 99, days: 7 }
           ],
-          noticeDays: 14
+          noticeDays: 14,
+          defaultMethod: 'transfer'
         },
         visa: {
           enabled: true, label: 'Продление визы',
-          amount: 205, noticeDays: 14
+          amount: 205, noticeDays: 14,
+          defaultMethod: 'transfer'
         },
         tagid: {
           enabled: true, label: 'Корпорация (тагид)',
-          amount: 840, noticeDays: 14
+          amount: 840, noticeDays: 14,
+          defaultMethod: 'transfer'
         },
         permit: {
           enabled: true, label: 'Продление разрешения',
-          amount: 370, intervalYears: 4, noticeDays: 14
+          amount: 370, intervalYears: 4, noticeDays: 14,
+          defaultMethod: 'transfer'
         }
       }
     };

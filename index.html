@@ -56,9 +56,32 @@
         <label for="pay-date">Когда заплатили</label>
         <input type="date" id="pay-date">
       </div>
+      <div class="form-row">
+        <label>Как оплачено</label>
+        <div class="method-toggle">
+          <button type="button" class="method-btn" id="pay-method-transfer">🏦 Перевод</button>
+          <button type="button" class="method-btn" id="pay-method-cash">💵 Наличные</button>
+        </div>
+      </div>
+      <div class="hint" id="pay-cash-hint" style="display:none">После подтверждения метапель распишется в получении.</div>
       <div class="modal-actions">
         <button class="btn btn-pay" id="pay-confirm">✓ ДА, ДЕНЬГИ ВЫПЛАЧЕНЫ</button>
         <button class="btn btn-undo modal-close">Отмена — вернуться назад</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- расписка: подпись метапеля пальцем -->
+  <div class="modal" id="modal-sign">
+    <div class="modal-box">
+      <h2>✍ Расписка о получении</h2>
+      <div class="sign-text" id="sign-text"></div>
+      <canvas id="sign-canvas"></canvas>
+      <div class="hint">Метапель: распишитесь пальцем в рамке выше и нажмите ОК.</div>
+      <div class="modal-actions">
+        <button class="btn btn-pay" id="sign-ok">✓ ОК — ДЕНЬГИ ПОЛУЧИЛ</button>
+        <button class="btn btn-light" id="sign-clear">Стереть и расписаться заново</button>
+        <button class="btn btn-undo" id="sign-later">Позже (расписаться потом)</button>
       </div>
     </div>
   </div>

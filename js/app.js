@@ -24,7 +24,9 @@
   var log = S.loadLog();
   var activeTab = 'due';
   var settingsUnlocked = false;
-  var currentPay = null; // вхождение в диалоге оплаты
+  var currentPay = null;      // вхождение в диалоге оплаты
+  var payMethod = 'transfer'; // выбранный способ в диалоге оплаты
+  var currentSignId = null;   // id записи, под которой ставится подпись
 
   var HORIZON_DAYS = 60;
 
@@ -225,7 +227,11 @@
     }
     var entries = ids.map(function (id) {
       var r = log[id];
-      return { id: id, title: r.title, dueDate: r.dueDate, paidDate: r.paidDate, amount: r.paidAmount };
+      return {
+        id: id, title: r.title, dueDate: r.dueDate, paidDate: r.paidDate,
+        amount: r.paidAmount, method: r.method || 'transfer',
+        signature: r.signature || null
+      };
     }).sort(function (a, b) {
       return a.paidDate < b.paidDate ? 1 : a.paidDate > b.paidDate ? -1 :
         (a.dueDate < b.dueDate ? 1 : -1);
@@ -240,10 +246,28 @@
       left.appendChild(el('div', 'card-title', esc(e.title)));
       left.appendChild(el('div', 'card-due',
         'оплачено ' + C.fmtDate(e.paidDate) + (e.dueDate ? ' · срок был ' + C.fmtDate(e.dueDate) : '')));
+      if (e.method === 'cash') {
+        left.appendChild(el('div', 'method-badge', e.signature
+          ? '💵 Наличные · ✍ Расписка получена ✓'
+          : '💵 Наличные · <span class="no-receipt">⚠ Нет расписки</span>'));
+      } else {
+        left.appendChild(el('div', 'method-badge', '🏦 Перевод'));
+      }
       head.appendChild(left);
       head.appendChild(el('div', 'card-amount', C.fmtMoney(e.amount)));
       div.appendChild(head);
+      if (e.signature) {
+        var img = el('img', 'sig-img');
+        img.src = e.signature;
+        img.alt = 'Подпись метапеля';
+        div.appendChild(img);
+      }
       var actions = el('div', 'card-actions');
+      if (e.method === 'cash' && !e.signature) {
+        var btnSign = el('button', 'btn btn-sign', '✍ МЕТАПЕЛЬ ПОЛУЧИЛ — РАСПИСАТЬСЯ');
+        btnSign.addEventListener('click', function () { openSignModal(e.id); });
+        actions.appendChild(btnSign);
+      }
       var btn = el('button', 'btn btn-undo', '↩ Отменить (нажали по ошибке)');
       btn.addEventListener('click', function () {
         if (confirm('Убрать отметку об оплате «' + e.title + '»? Платёж вернётся в напоминания.')) {
@@ -277,8 +301,16 @@
     }
     $('#pay-amount').value = o.amount;
     $('#pay-date').value = today();
+    payMethod = settings.types[o.type].defaultMethod || 'transfer';
+    updateMethodButtons();
     updatePayBig();
     $('#modal-pay').classList.add('open');
+  }
+
+  function updateMethodButtons() {
+    $('#pay-method-transfer').classList.toggle('active', payMethod === 'transfer');
+    $('#pay-method-cash').classList.toggle('active', payMethod === 'cash');
+    $('#pay-cash-hint').style.display = payMethod === 'cash' ? '' : 'none';
   }
 
   function updatePayBig() {
@@ -308,13 +340,75 @@
     var paidDate = $('#pay-date').value;
     if (isNaN(amount) || amount < 0) { alert('Укажите сумму.'); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(paidDate)) { alert('Укажите дату оплаты.'); return; }
-    S.markPaid(currentPay.id, {
+    var id = currentPay.id;
+    var needSign = payMethod === 'cash';
+    S.markPaid(id, {
       title: currentPay.title,
       dueDate: currentPay.dueDate,
       amount: currentPay.amount,
       paidAmount: C.round2(amount),
-      paidDate: paidDate
+      paidDate: paidDate,
+      method: payMethod,
+      signature: null,
+      signedDate: null
     });
+    log = S.loadLog();
+    closeModals();
+    render();
+    if (needSign) openSignModal(id); // наличные — сразу расписка
+  }
+
+  // ---------- расписка (подпись пальцем) ----------
+
+  var signCtx = null;
+  var signDrawing = false;
+  var signInk = false;
+
+  function openSignModal(id) {
+    var r = log[id];
+    if (!r) return;
+    currentSignId = id;
+    $('#sign-text').innerHTML = 'Я, <b>' + esc(settings.workerName) + '</b>, получил наличными <b>' +
+      C.fmtMoney(r.paidAmount) + '</b><br>' + esc(r.title) +
+      ' · от: ' + esc(settings.employerName) +
+      ' · дата: ' + C.fmtDate(r.paidDate);
+    $('#modal-sign').classList.add('open');
+    setupSignCanvas();
+  }
+
+  function setupSignCanvas() {
+    var canvas = $('#sign-canvas');
+    // внутреннее разрешение по фактическому размеру на экране
+    var rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(300, Math.round(rect.width));
+    canvas.height = 240;
+    signCtx = canvas.getContext('2d');
+    signCtx.fillStyle = '#ffffff';
+    signCtx.fillRect(0, 0, canvas.width, canvas.height);
+    signCtx.strokeStyle = '#1e293b';
+    signCtx.lineWidth = 3.5;
+    signCtx.lineCap = 'round';
+    signCtx.lineJoin = 'round';
+    signInk = false;
+    signDrawing = false;
+  }
+
+  function signPos(e) {
+    var canvas = $('#sign-canvas');
+    var rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * canvas.width / rect.width,
+      y: (e.clientY - rect.top) * canvas.height / rect.height
+    };
+  }
+
+  function confirmSign() {
+    if (!signInk) { alert('Сначала распишитесь пальцем в рамке.'); return; }
+    var r = log[currentSignId];
+    if (!r) { closeModals(); return; }
+    r.signature = $('#sign-canvas').toDataURL('image/png');
+    r.signedDate = today();
+    S.markPaid(currentSignId, r);
     log = S.loadLog();
     closeModals();
     render();
@@ -323,6 +417,12 @@
   // ---------- настройки ----------
 
   var WEEKDAY_OPTIONS = C.WEEKDAYS.map(function (w, i) { return [i, w]; });
+  var METHOD_OPTIONS = [['transfer', 'перевод'], ['cash', 'наличные']];
+
+  function methodField(typeKey) {
+    return { path: 'types.' + typeKey + '.defaultMethod', label: 'Способ оплаты по умолчанию',
+      type: 'select', options: METHOD_OPTIONS };
+  }
 
   function settingsForm() {
     return [
@@ -335,17 +435,20 @@
         { path: 'types.salary.net', label: 'Нетто в месяц, ₪', type: 'number' },
         { path: 'types.salary.shabbatRate', label: 'За субботу (шабат), ₪', type: 'number' },
         { path: 'types.salary.dayOfMonth', label: 'День выплаты (числа следующего месяца)', type: 'number' },
-        { path: 'types.salary.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        { path: 'types.salary.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
+        methodField('salary')
       ] },
       { section: 'Карманные (дмей кис)', enable: 'types.pocket.enabled', fields: [
         { path: 'types.pocket.amount', label: 'Сумма в неделю, ₪', type: 'number' },
         { path: 'types.pocket.weekday', label: 'День недели', type: 'select', options: WEEKDAY_OPTIONS },
-        { path: 'types.pocket.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        { path: 'types.pocket.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
+        methodField('pocket')
       ] },
       { section: 'Мед. страховка', enable: 'types.insurance.enabled', fields: [
         { path: 'types.insurance.amount', label: 'Сумма в месяц, ₪', type: 'number' },
         { path: 'types.insurance.dayOfMonth', label: 'День оплаты (число месяца)', type: 'number' },
-        { path: 'types.insurance.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        { path: 'types.insurance.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
+        methodField('insurance')
       ] },
       { section: 'Битуах Леуми', enable: 'types.bituach.enabled', fields: [
         { path: 'types.bituach.ratePercent', label: 'Ставка, % от брутто', type: 'number' },
@@ -354,7 +457,8 @@
           options: [['monthly', 'ежемесячно'], ['quarterly', 'раз в квартал']] },
         { path: 'types.bituach.dayOfMonth', label: 'День оплаты при ежемесячной (числа след. месяца)', type: 'number' },
         { path: 'types.bituach.quarterDay', label: 'День оплаты при квартальной (числа месяца после квартала)', type: 'number' },
-        { path: 'types.bituach.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        { path: 'types.bituach.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
+        methodField('bituach')
       ] },
       { section: 'Пикадон (пенсия + компенсация)', enable: 'types.pikadon.enabled', fields: [
         { path: 'types.pikadon.pensionPercent', label: 'Пенсия, %', type: 'number' },
@@ -362,27 +466,32 @@
         { path: 'types.pikadon.grossBase', label: 'Брутто-база, ₪', type: 'number' },
         { path: 'types.pikadon.fromMonth', label: 'Платится начиная с месяца работы №', type: 'number' },
         { path: 'types.pikadon.dayOfMonth', label: 'День оплаты (числа след. месяца)', type: 'number' },
-        { path: 'types.pikadon.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        { path: 'types.pikadon.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
+        methodField('pikadon')
       ] },
       { section: 'Дмей хавраа (оздоровительные)', enable: 'types.havraa.enabled', fields: [
         { path: 'types.havraa.dayRate', label: 'Ставка за день, ₪', type: 'number' },
         { path: 'types.havraa.tiers.0.days', label: 'Дней за 1-й год', type: 'number' },
         { path: 'types.havraa.tiers.1.days', label: 'Дней за 2–3-й годы', type: 'number' },
         { path: 'types.havraa.tiers.2.days', label: 'Дней за 4–10-й годы', type: 'number' },
-        { path: 'types.havraa.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        { path: 'types.havraa.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
+        methodField('havraa')
       ] },
       { section: 'Продление визы', enable: 'types.visa.enabled', fields: [
         { path: 'types.visa.amount', label: 'Сумма, ₪ (раз в год)', type: 'number' },
-        { path: 'types.visa.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        { path: 'types.visa.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
+        methodField('visa')
       ] },
       { section: 'Корпорация (тагид)', enable: 'types.tagid.enabled', fields: [
         { path: 'types.tagid.amount', label: 'Сумма, ₪ (раз в год)', type: 'number' },
-        { path: 'types.tagid.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        { path: 'types.tagid.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
+        methodField('tagid')
       ] },
       { section: 'Продление разрешения', enable: 'types.permit.enabled', fields: [
         { path: 'types.permit.amount', label: 'Сумма, ₪', type: 'number' },
         { path: 'types.permit.intervalYears', label: 'Раз во сколько лет', type: 'number' },
-        { path: 'types.permit.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        { path: 'types.permit.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
+        methodField('permit')
       ] }
     ];
   }
@@ -558,6 +667,7 @@
   function closeModals() {
     document.querySelectorAll('.modal').forEach(function (m) { m.classList.remove('open'); });
     currentPay = null;
+    currentSignId = null;
   }
 
   function init() {
@@ -590,6 +700,42 @@
     $('#pay-sats-minus').addEventListener('click', function () { stepSats(-1); });
     $('#pay-sats-plus').addEventListener('click', function () { stepSats(1); });
     $('#pay-amount').addEventListener('input', updatePayBig);
+    $('#pay-method-transfer').addEventListener('click', function () {
+      payMethod = 'transfer';
+      updateMethodButtons();
+    });
+    $('#pay-method-cash').addEventListener('click', function () {
+      payMethod = 'cash';
+      updateMethodButtons();
+    });
+
+    // рисование подписи пальцем/мышью
+    var canvas = $('#sign-canvas');
+    canvas.addEventListener('pointerdown', function (e) {
+      if (!signCtx) return;
+      signDrawing = true;
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* синтетические события */ }
+      var p = signPos(e);
+      signCtx.beginPath();
+      signCtx.moveTo(p.x, p.y);
+      signCtx.lineTo(p.x + 0.1, p.y + 0.1); // точка при простом касании
+      signCtx.stroke();
+      signInk = true;
+      e.preventDefault();
+    });
+    canvas.addEventListener('pointermove', function (e) {
+      if (!signDrawing || !signCtx) return;
+      var p = signPos(e);
+      signCtx.lineTo(p.x, p.y);
+      signCtx.stroke();
+      e.preventDefault();
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) {
+      canvas.addEventListener(ev, function () { signDrawing = false; });
+    });
+    $('#sign-ok').addEventListener('click', confirmSign);
+    $('#sign-clear').addEventListener('click', setupSignCanvas);
+    $('#sign-later').addEventListener('click', closeModals);
     $('#pay-confirm').addEventListener('click', confirmPay);
     $('#pass-confirm').addEventListener('click', checkPassword);
     $('#pass-input').addEventListener('keydown', function (e) {

@@ -8,6 +8,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Выплаты">
@@ -40,7 +41,7 @@
       <div class="pay-amount-big" id="pay-amount-big"></div>
       <ul id="pay-breakdown"></ul>
       <div class="form-row" id="pay-sats-row" style="display:none">
-        <label>Суббот отработано</label>
+        <label for="pay-sats">Суббот отработано</label>
         <div class="stepper">
           <button type="button" id="pay-sats-minus">−</button>
           <input type="number" id="pay-sats" min="0" max="5" step="1">
@@ -48,11 +49,11 @@
         </div>
       </div>
       <div class="form-row">
-        <label>Сколько заплатили, ₪</label>
+        <label for="pay-amount">Сколько заплатили, ₪</label>
         <input type="number" id="pay-amount" min="0" step="any">
       </div>
       <div class="form-row">
-        <label>Когда заплатили</label>
+        <label for="pay-date">Когда заплатили</label>
         <input type="date" id="pay-date">
       </div>
       <div class="modal-actions">
@@ -68,7 +69,7 @@
       <h2>Вход в настройки</h2>
       <div class="muted">Этот раздел — для родственников, которые настраивают суммы.</div>
       <div class="form-row">
-        <label>Пароль</label>
+        <label for="pass-input">Пароль</label>
         <input type="password" id="pass-input">
       </div>
       <div class="error" id="pass-error" style="display:none">Неверный пароль.</div>

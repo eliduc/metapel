@@ -413,7 +413,10 @@
       fs.appendChild(legend);
       sec.fields.forEach(function (f) {
         var row = el('div', 'form-row');
-        row.appendChild(el('label', null, esc(f.label)));
+        var fieldId = 'set-' + f.path.replace(/\./g, '-');
+        var lbl = el('label', null, esc(f.label));
+        lbl.htmlFor = fieldId;
+        row.appendChild(lbl);
         var input;
         if (f.type === 'select') {
           input = el('select');
@@ -429,6 +432,7 @@
           if (f.type === 'number') input.step = 'any';
           input.value = getPath(settings, f.path);
         }
+        input.id = fieldId;
         input.dataset.path = f.path;
         input.dataset.kind = f.type;
         row.appendChild(input);
@@ -441,12 +445,16 @@
     var fsP = el('fieldset');
     fsP.appendChild(el('legend', null, 'Пароль настроек'));
     var rowP1 = el('div', 'form-row');
-    rowP1.appendChild(el('label', null, 'Новый пароль (пусто — не менять)'));
+    var lblP1 = el('label', null, 'Новый пароль (пусто — не менять)');
+    lblP1.htmlFor = 'set-pass1';
+    rowP1.appendChild(lblP1);
     var p1 = el('input'); p1.type = 'password'; p1.id = 'set-pass1';
     rowP1.appendChild(p1);
     fsP.appendChild(rowP1);
     var rowP2 = el('div', 'form-row');
-    rowP2.appendChild(el('label', null, 'Повторите новый пароль'));
+    var lblP2 = el('label', null, 'Повторите новый пароль');
+    lblP2.htmlFor = 'set-pass2';
+    rowP2.appendChild(lblP2);
     var p2 = el('input'); p2.type = 'password'; p2.id = 'set-pass2';
     rowP2.appendChild(p2);
     fsP.appendChild(rowP2);

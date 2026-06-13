@@ -154,6 +154,14 @@ window.MetapelSync = (function () {
   // загружает backup/data.json в архив, если данные изменились
   function backupIfChanged(settings, store, hashFn) {
     if (!isOn(settings)) return Promise.resolve(false);
+    // КРИТИЧНО: не затираем облачную копию пустыми/начальными данными. На новом
+    // или переустановленном устройстве архив включают ДО восстановления, и тогда
+    // локальные log/extras/returns ещё пусты — пустой бэкап стёр бы хорошую копию
+    // раньше, чем пользователь нажмёт «Восстановить» (потеря всей истории).
+    var empty = Object.keys(store.loadLog()).length === 0 &&
+                store.loadExtras().length === 0 &&
+                store.loadReturns().length === 0;
+    if (empty) return Promise.resolve(false);
     var json = buildBackupJson(settings, store);
     var h = hashFn(json);
     if (store.getMeta('lastBackupHash') === h) return Promise.resolve(false);

@@ -227,6 +227,15 @@
     eq('Ставка 250: зачёт 6500 (не урезан до grossBase)', C.blMonthlyOffset(hiRate), 6500);
     var midRate = withBl(); midRate.bl.hourValueMonth = 248; // 26×248=6448, между grossBase и net
     eq('Ставка 248: зачёт 6448 не урезан до grossBase', C.blMonthlyOffset(midRate), 6448);
+    // нетто-зарплата НИЖЕ зачёта: соцзачёт НЕ урезается по net (взносы от настоящего зачёта)
+    var lowNet = withBl(); lowNet.types.salary.net = 5000; // < зачёт 6266
+    var lowList = C.generateOccurrences(lowNet, '2026-08-01', 60);
+    eq('net 5000 < зачёт: Битуах от настоящего зачёта (база 177,85) = 6,40',
+      find(lowList, 'bituach-2026-07').amount, 6.4);
+    eq('net 5000: зарплатный зачёт капится net → доплата = только шабат (4×440)',
+      find(lowList, 'salary-2026-07').amount, 1760);
+    var lowPik = find(C.generateOccurrences(lowNet, '2027-01-05', 60), 'pikadon-2026-12');
+    eq('net 5000: пикадон от настоящего зачёта = 22,23 (не завышен)', lowPik && lowPik.amount, 22.23);
 
     // ---------- калькулятор окончания работы ----------
     eq('monthsBetween: ровно 18 месяцев', C.monthsBetween('2026-06-10', '2027-12-10'), 18);

@@ -213,18 +213,20 @@ window.MetapelCalc = (function () {
   // законный максимум часов по уходу (уровень 6, иностранный работник)
   var BL_MAX_HOURS = 26;
 
-  function blMonthlyOffset(settings) {
+  // полный зачёт = часы × ставка (без потолков), когда часы утверждены
+  function rawBlOffset(settings) {
     var bl = settings.bl || {};
     if (!bl.approved) return 0; // часы ещё не утверждены — зачёта нет
-    var off = round2((bl.hoursPerWeek || 0) * (bl.hourValueMonth || 0));
-    // страховка от абсурдного ввода (опечатка в часах/ставке): зачёт зарплаты
-    // не может превышать саму нетто-зарплату — иначе он обнулил бы все выплаты,
-    // и приложение молча показало бы «платить нечего». Базы взносов и пикадона
-    // защищены отдельно через Math.max(0, grossBase − зачёт), поэтому кап здесь
-    // именно по net, а НЕ по grossBase (иначе при ставке выше ~248 ₪ доплата
-    // семьи завышалась бы — переплата).
-    var cap = (settings.types && settings.types.salary) ? settings.types.salary.net : off;
-    return Math.min(off, cap);
+    return round2((bl.hoursPerWeek || 0) * (bl.hourValueMonth || 0));
+  }
+
+  // зачёт ЗАРПЛАТЫ: ограничен нетто-зарплатой — государство не субсидирует
+  // больше нетто, чем есть, иначе доплата семьи ушла бы «в минус»/«платить
+  // нечего». Базы взносов/пикадона капить по net НЕЛЬЗЯ (см. blSocialOffset).
+  function blMonthlyOffset(settings) {
+    var off = rawBlOffset(settings);
+    var net = (settings.types && settings.types.salary) ? settings.types.salary.net : off;
+    return Math.min(off, net);
   }
 
   // нормализация настроек при загрузке/восстановлении: часы из любого
@@ -248,9 +250,12 @@ window.MetapelCalc = (function () {
     return (net - off) / net;
   }
 
+  // зачёт для СОЦВЫПЛАТ (взносы/пикадон): берём ПОЛНЫЙ зачёт без потолка по net —
+  // базы и так флорятся через Math.max(0, grossBase − зачёт). Кап по net занижал
+  // бы соцзачёт и завышал взносы, если нетто-зарплата ниже зачёта.
   function blSocialOffset(settings) {
     var bl = settings.bl || {};
-    return bl.approved && bl.applyToSocial ? blMonthlyOffset(settings) : 0;
+    return bl.approved && bl.applyToSocial ? rawBlOffset(settings) : 0;
   }
 
   // ---------- генерация вхождений ----------

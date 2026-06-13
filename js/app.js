@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '1.8 от 13.06.2026';
+  var APP_VERSION = '1.9 от 13.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -346,6 +346,15 @@
 
   // ---------- часы Битуах Леуми: статус на главном экране ----------
 
+  // законный максимум — 26 ч/нед (уровень 6, иностранный работник);
+  // выше этого зачёт превысил бы зарплату и обнулил бы все выплаты
+  var MAX_BL_HOURS = 26;
+
+  function clampHours(h) {
+    if (isNaN(h) || h < 0) return 0;
+    return Math.min(MAX_BL_HOURS, h);
+  }
+
   function blStatusCard(content) {
     var bl = settings.bl || {};
     if (bl.approved) {
@@ -382,22 +391,31 @@
   function stepHours(delta) {
     var v = parseInt($('#hours-input').value, 10);
     if (isNaN(v)) v = 0;
-    v = Math.max(0, Math.min(40, v + delta));
+    v = clampHours(v + delta);
     $('#hours-input').value = v;
     updateHoursEffect();
   }
 
   function updateHoursEffect() {
-    var h = parseInt($('#hours-input').value, 10);
-    if (isNaN(h) || h < 0) h = 0;
+    var h = clampHours(parseInt($('#hours-input').value, 10));
     var off = C.round2(h * ((settings.bl && settings.bl.hourValueMonth) || 0));
     $('#hours-effect').textContent = 'Государство будет платить ≈ ' + C.fmtMoney(off) + ' в месяц.';
   }
 
   function saveHours() {
     if (!actionGuard()) return;
-    var h = parseInt($('#hours-input').value, 10);
-    if (isNaN(h) || h < 0) { appAlert('Укажите число часов.'); return; }
+    var raw = parseInt($('#hours-input').value, 10);
+    if (isNaN(raw) || raw < 0) { appAlert('Укажите число часов.'); return; }
+    if (raw > MAX_BL_HOURS) {
+      // защита от опечатки (например 260 вместо 26): такое число обнулило бы
+      // все выплаты — показываем максимум и просим подтвердить ещё раз
+      $('#hours-input').value = MAX_BL_HOURS;
+      updateHoursEffect();
+      appAlert('Максимум — ' + MAX_BL_HOURS + ' часов в неделю (уровень 6). ' +
+        'Поставил ' + MAX_BL_HOURS + ' — проверьте и нажмите «сохранить» ещё раз.');
+      return;
+    }
+    var h = clampHours(raw);
     settings.bl.approved = true;
     settings.bl.hoursPerWeek = h;
     S.saveSettings(settings);

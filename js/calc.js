@@ -129,11 +129,12 @@ window.MetapelCalc = (function () {
       passwordTtlMinutes: 10, // сколько минут не спрашивать пароль настроек повторно
       // Часы по уходу от Битуах Леуми (гмлат сиуд): организация по уходу
       // получает деньги за часы и платит метапелю свою часть зарплаты.
-      // По умолчанию — максимум: уровень 6 при иностранном работнике,
-      // 26 часов в неделю, недельный час ≈ 241 ₪ в месяц (2025).
+      // Пока часы не утверждены (approved=false) — зачёт 0, всю зарплату
+      // платит семья. После утверждения зачёт = hoursPerWeek × hourValueMonth;
+      // максимум 26 ч/нед (уровень 6, иностранный работник), час ≈ 241 ₪/мес (2025).
       bl: {
-        enabled: true,
-        hoursPerWeek: 26,
+        approved: false,    // часы утверждены (отмечается на главном экране)
+        hoursPerWeek: 26,   // сколько часов/нед применять, когда утверждены
         hourValueMonth: 241,
         applyToSocial: true // уменьшать также взносы, пикадон и хавраа
       },
@@ -211,7 +212,7 @@ window.MetapelCalc = (function () {
   // сумма, которую покрывает организация по уходу за счёт часов БЛ, ₪/мес
   function blMonthlyOffset(settings) {
     var bl = settings.bl || {};
-    if (!bl.enabled) return 0;
+    if (!bl.approved) return 0; // часы ещё не утверждены — зачёта нет
     return round2((bl.hoursPerWeek || 0) * (bl.hourValueMonth || 0));
   }
 
@@ -227,7 +228,7 @@ window.MetapelCalc = (function () {
 
   function blSocialOffset(settings) {
     var bl = settings.bl || {};
-    return bl.enabled && bl.applyToSocial ? blMonthlyOffset(settings) : 0;
+    return bl.approved && bl.applyToSocial ? blMonthlyOffset(settings) : 0;
   }
 
   // ---------- генерация вхождений ----------
@@ -536,7 +537,7 @@ window.MetapelCalc = (function () {
     var out = [];
     var blOff = blMonthlyOffset(settings);
     var blSoc = blSocialOffset(settings);
-    var famShare = (settings.bl && settings.bl.enabled && settings.bl.applyToSocial)
+    var famShare = (settings.bl && settings.bl.approved && settings.bl.applyToSocial)
       ? blFamilyShare(settings) : 1;
     if (start && /^\d{4}-\d{2}-\d{2}$/.test(start)) {
       if (t.salary.enabled) genSalary(t.salary, start, end, out, blOff, settings.bl || {});
@@ -606,7 +607,7 @@ window.MetapelCalc = (function () {
     var warnings = [];
     var blOff = blMonthlyOffset(settings);
     var blSoc = blSocialOffset(settings);
-    var famShare = (settings.bl && settings.bl.enabled && settings.bl.applyToSocial)
+    var famShare = (settings.bl && settings.bl.approved && settings.bl.applyToSocial)
       ? blFamilyShare(settings) : 1;
     var base = Math.max(0, round2(t.pikadon.grossBase - blSoc));
     var months = monthsBetween(start, endISO);

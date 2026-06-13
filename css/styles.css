@@ -489,6 +489,19 @@ nav {
   font-size: 21px;
 }
 
+/* статус часов Битуах Леуми на главном экране */
+.bl-card {
+  border-radius: 16px;
+  padding: 14px 18px;
+  margin: 12px 0;
+  font-size: 21px;
+  border: 3px solid;
+}
+.bl-pending { background: #fef3c7; border-color: var(--amber); }
+.bl-approved { background: #dcfce7; border-color: var(--green); }
+.bl-card .bl-sub { font-size: 18px; font-weight: 400; color: var(--text); margin: 8px 0; }
+.bl-card .btn { margin-top: 6px; }
+
 .balance-card .btn { margin-top: 10px; }
 
 .btn-return {

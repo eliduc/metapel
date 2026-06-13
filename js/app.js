@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '1.7 от 12.06.2026';
+  var APP_VERSION = '1.8 от 13.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -229,7 +229,7 @@
     renderNav(occ);
     var content = $('#content');
     content.innerHTML = '';
-    if (activeTab === 'due') { renderDue(occ, content); extrasBlock(content); }
+    if (activeTab === 'due') { blStatusCard(content); renderDue(occ, content); extrasBlock(content); }
     else if (activeTab === 'upcoming') renderUpcoming(occ, content);
     else if (activeTab === 'history') renderHistory(content);
     else if (activeTab === 'settings') renderSettings(content);
@@ -342,6 +342,81 @@
       C.plural(due.length, 'платёж', 'платежа', 'платежей') +
       ' — список ниже. После каждой оплаты нажмите зелёную кнопку.</div>'));
     due.forEach(function (o) { content.appendChild(card(o, true)); });
+  }
+
+  // ---------- часы Битуах Леуми: статус на главном экране ----------
+
+  function blStatusCard(content) {
+    var bl = settings.bl || {};
+    if (bl.approved) {
+      var off = C.blMonthlyOffset(settings);
+      var cardA = el('div', 'bl-card bl-approved',
+        '✅ Часы от государства утверждены: <b>' + (bl.hoursPerWeek || 0) + ' ч/нед</b>' +
+        '<div class="bl-sub">Государство оплачивает часть зарплаты (≈ ' + C.fmtMoney(off) +
+        ' в месяц). Суммы ниже — это доплата семьи.</div>');
+      var btnA = el('button', 'btn btn-light', '✎ Изменить часы');
+      btnA.addEventListener('click', openHoursModal);
+      cardA.appendChild(btnA);
+      content.appendChild(cardA);
+    } else {
+      var cardP = el('div', 'bl-card bl-pending',
+        '⏳ Часы от государства пока <b>не утверждены</b>' +
+        '<div class="bl-sub">Заявление на рассмотрении в Битуах Леуми. Пока решения нет, ' +
+        'зарплата платится полностью. Когда часы утвердят — отметьте здесь.</div>');
+      var btnP = el('button', 'btn btn-light', '✓ Часы утвердили — указать');
+      btnP.addEventListener('click', openHoursModal);
+      cardP.appendChild(btnP);
+      content.appendChild(cardP);
+    }
+  }
+
+  function openHoursModal() {
+    var bl = settings.bl || {};
+    $('#hours-input').value = bl.hoursPerWeek || 0;
+    $('#hours-revert').style.display = bl.approved ? '' : 'none';
+    updateHoursEffect();
+    $('#modal-hours').classList.add('open');
+    updateScrollLock();
+  }
+
+  function stepHours(delta) {
+    var v = parseInt($('#hours-input').value, 10);
+    if (isNaN(v)) v = 0;
+    v = Math.max(0, Math.min(40, v + delta));
+    $('#hours-input').value = v;
+    updateHoursEffect();
+  }
+
+  function updateHoursEffect() {
+    var h = parseInt($('#hours-input').value, 10);
+    if (isNaN(h) || h < 0) h = 0;
+    var off = C.round2(h * ((settings.bl && settings.bl.hourValueMonth) || 0));
+    $('#hours-effect').textContent = 'Государство будет платить ≈ ' + C.fmtMoney(off) + ' в месяц.';
+  }
+
+  function saveHours() {
+    if (!actionGuard()) return;
+    var h = parseInt($('#hours-input').value, 10);
+    if (isNaN(h) || h < 0) { appAlert('Укажите число часов.'); return; }
+    settings.bl.approved = true;
+    settings.bl.hoursPerWeek = h;
+    S.saveSettings(settings);
+    settings = S.loadSettings();
+    closeModals();
+    render();
+    showToast('✓ Часы сохранены');
+    runSync();
+  }
+
+  function revertHours() {
+    if (!actionGuard()) return;
+    settings.bl.approved = false;
+    S.saveSettings(settings);
+    settings = S.loadSettings();
+    closeModals();
+    render();
+    showToast('✓ Отмечено: часы не утверждены');
+    runSync();
   }
 
   // блок «выдать деньги» + баланс «под отчёт» (на вкладке «Платить»)
@@ -868,14 +943,14 @@
           options: [[100, 'обычный'], [115, 'крупный'], [125, 'очень крупный']] },
         { path: 'passwordTtlMinutes', label: 'Помнить пароль настроек, минут', type: 'number' }
       ] },
-      { section: '⏱ Часы Битуах Леуми (гмлат сиуд)', enable: 'bl.enabled',
-        hint: 'Битуах Леуми выделяет часы по уходу; организация по уходу получает за них деньги ' +
-          'и платит метапелю свою часть зарплаты — семья доплачивает остальное. ' +
+      { section: '⏱ Часы Битуах Леуми (гмлат сиуд)', enable: 'bl.approved',
+        hint: 'Утверждение часов и их количество отмечаются на главном экране кнопкой ' +
+          '«Часы утвердили». Галочка слева — та же отметка «часы утверждены». ' +
           'Максимум при иностранном работнике — 26 часов в неделю (уровень 6), ' +
           'недельный час ≈ 241 ₪ в месяц (2025). Сейчас зачёт: ' +
           C.fmtMoney(C.blMonthlyOffset(settings)) + ' в месяц.',
         fields: [
-        { path: 'bl.hoursPerWeek', label: 'Часов в неделю от Битуах Леуми', type: 'number' },
+        { path: 'bl.hoursPerWeek', label: 'Часов в неделю (когда утверждены)', type: 'number' },
         { path: 'bl.hourValueMonth', label: 'Стоимость недельного часа, ₪ в месяц', type: 'number' },
         { path: 'bl.applyToSocial', label: 'Уменьшать также взносы, пикадон и хавраа', type: 'checkbox' }
       ] },
@@ -1312,6 +1387,13 @@
       updateFinalButtons();
     });
     $('#final-calc').addEventListener('click', runFinalCalc);
+
+    // часы Битуах Леуми (главный экран)
+    $('#hours-minus').addEventListener('click', function () { stepHours(-1); });
+    $('#hours-plus').addEventListener('click', function () { stepHours(1); });
+    $('#hours-input').addEventListener('input', updateHoursEffect);
+    $('#hours-save').addEventListener('click', saveHours);
+    $('#hours-revert').addEventListener('click', revertHours);
     $('#pay-confirm').addEventListener('click', confirmPay);
     $('#pass-confirm').addEventListener('click', checkPassword);
     $('#pass-input').addEventListener('keydown', function (e) {

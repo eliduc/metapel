@@ -152,6 +152,28 @@
     </div>
   </div>
 
+  <!-- часы Битуах Леуми: отметка утверждения и количество (с главного экрана) -->
+  <div class="modal" id="modal-hours">
+    <div class="modal-box">
+      <h2>⏱ Часы Битуах Леуми</h2>
+      <div class="muted">Государство выделяет часы по уходу. Когда их утвердят — укажите, сколько часов в неделю утвердили.</div>
+      <div class="form-row">
+        <label for="hours-input">Часов в неделю</label>
+        <div class="stepper">
+          <button type="button" id="hours-minus">−</button>
+          <input type="number" id="hours-input" min="0" max="40" step="1">
+          <button type="button" id="hours-plus">+</button>
+        </div>
+      </div>
+      <div class="hint" id="hours-effect"></div>
+      <div class="modal-actions">
+        <button class="btn btn-pay" id="hours-save">✓ Часы утверждены — сохранить</button>
+        <button class="btn btn-light" id="hours-revert" style="display:none">Отметить: часы ещё не утверждены</button>
+        <button class="btn btn-undo modal-close">Отмена</button>
+      </div>
+    </div>
+  </div>
+
   <!-- калькулятор окончания работы (для родственников, из настроек) -->
   <div class="modal" id="modal-final">
     <div class="modal-box">

@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '3.1 от 13.06.2026';
+  var APP_VERSION = '3.2 от 13.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -1338,6 +1338,45 @@
     });
   }
 
+  // ---------- принудительное обновление приложения ----------
+
+  // Сбрасывает кэш service worker и перечитывает оболочку из сети, минуя любой
+  // кэш — на случай, когда планшет «застрял» на старой версии. Данные (оплаты,
+  // расписки, под отчёт) лежат в localStorage и НЕ затрагиваются.
+  function forceRefresh() {
+    // actionGuard НЕ вызываем: кнопка идёт через appConfirm, чей «Да» уже
+    // прошёл actionGuard — повторный вызов попал бы в 600-мс блокировку.
+    // Без сети чистить кэш и снимать service worker нельзя — иначе после
+    // reload приложение не загрузится (офлайн-копии уже не будет).
+    if (navigator.onLine === false) {
+      appAlert('Нет интернета — обновить не получится. Подключитесь к сети и попробуйте снова.');
+      return;
+    }
+    showToast('🔄 Обновляю…');
+    var SHELL = ['index.html', 'css/styles.css', 'js/calc.js', 'js/storage.js',
+      'js/sync.js', 'js/app.js', 'manifest.json'];
+    function clearCaches() {
+      if (!(window.caches && caches.keys)) return Promise.resolve();
+      return caches.keys().then(function (keys) {
+        return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+      });
+    }
+    function dropWorkers() {
+      if (!(navigator.serviceWorker && navigator.serviceWorker.getRegistrations)) return Promise.resolve();
+      return navigator.serviceWorker.getRegistrations().then(function (regs) {
+        return Promise.all(regs.map(function (r) { return r.unregister(); }));
+      });
+    }
+    function refetchShell() {
+      // {cache:'reload'} заставляет обойти и HTTP-кэш браузера, а не только SW
+      return Promise.all(SHELL.map(function (f) {
+        return fetch(f, { cache: 'reload' }).catch(function () { /* офлайн — не критично */ });
+      }));
+    }
+    function reloadNow() { location.reload(); }
+    clearCaches().then(dropWorkers).then(refetchShell).then(reloadNow, reloadNow);
+  }
+
   // ---------- модальные окна и события ----------
 
   function closeModals() {
@@ -1363,6 +1402,10 @@
       render();
     });
     $('#btn-final').addEventListener('click', openFinalModal);
+    $('#btn-refresh').addEventListener('click', function () {
+      appConfirm('Обновить приложение до последней версии? Данные (оплаты, расписки, под отчёт) сохранятся.',
+        'Да, обновить', forceRefresh);
+    });
     window.addEventListener('resize', applyScale);
     $('#btn-notify').addEventListener('click', function () {
       Notification.requestPermission().then(function (perm) {

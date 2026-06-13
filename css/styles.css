@@ -38,7 +38,7 @@ button { font-family: inherit; }
 
 /* ---------- шапка ---------- */
 
-header { position: relative; padding-right: 134px; }
+header { position: relative; padding-right: 202px; }
 
 header h1 {
   font-size: 27px;
@@ -65,7 +65,7 @@ header h1 {
   vertical-align: middle;
 }
 
-#btn-settings, #btn-final {
+#btn-settings, #btn-final, #btn-refresh {
   position: absolute;
   top: 6px;
   width: 58px;
@@ -80,6 +80,7 @@ header h1 {
 
 #btn-settings { right: 0; }
 #btn-final { right: 68px; }
+#btn-refresh { right: 136px; }
 
 #btn-notify {
   margin-bottom: 10px;

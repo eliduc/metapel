@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '2.6 от 13.06.2026';
+  var APP_VERSION = '2.7 от 13.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -1181,6 +1181,9 @@
               extras: data.extras || [],
               returns: data.returns || []
             });
+            // «усыновляем» версию облака: устройство теперь актуально и может
+            // дописывать бэкап, не считаясь устаревшим; чужую историю не затрёт
+            S.setMeta('backupGeneration', (typeof data.generation === 'number') ? data.generation : 0);
             settings = S.loadSettings();
             reloadData();
             render();

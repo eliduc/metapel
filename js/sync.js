@@ -136,58 +136,39 @@ window.MetapelSync = (function () {
     return c;
   }
 
-  function buildBackupJson(settings, store) {
+  function buildBackupObject(settings, store, generation) {
     var cleanSettings = JSON.parse(JSON.stringify(settings));
     if (cleanSettings.sync) cleanSettings.sync.token = ''; // токен не покидает устройство
     var log = store.loadLog();
     var lightLog = {};
     Object.keys(log).forEach(function (id) { lightLog[id] = lightenRecord(log[id]); });
-    return JSON.stringify({
+    return {
       kind: 'metapel-backup',
+      generation: generation, // монотонная версия копии (защита от затирания)
       settings: cleanSettings,
       log: lightLog,
       extras: store.loadExtras().map(lightenRecord),
       returns: store.loadReturns()
-    }, null, 2);
+    };
   }
 
-  // загружает backup/data.json в архив, если данные изменились
-  function backupIfChanged(settings, store, hashFn) {
-    if (!isOn(settings)) return Promise.resolve(false);
-    // КРИТИЧНО: не затираем облачную копию пустыми/начальными данными. На новом
-    // или переустановленном устройстве архив включают ДО восстановления, и тогда
-    // локальные log/extras/returns ещё пусты — пустой бэкап стёр бы хорошую копию
-    // раньше, чем пользователь нажмёт «Восстановить» (потеря всей истории).
-    var empty = Object.keys(store.loadLog()).length === 0 &&
-                store.loadExtras().length === 0 &&
-                store.loadReturns().length === 0;
-    if (empty) return Promise.resolve(false);
-    var json = buildBackupJson(settings, store);
-    var h = hashFn(json);
-    if (store.getMeta('lastBackupHash') === h) return Promise.resolve(false);
-    return putFile(conf(settings), 'backup/data.json', json, 'Data backup').then(function () {
-      store.setMeta('lastBackupHash', h);
-      return true;
-    }).catch(function (e) {
-      store.setMeta('lastSyncError', String(e && e.message || e));
-      return false;
-    });
+  function buildBackupJson(settings, store, generation) {
+    return JSON.stringify(buildBackupObject(settings, store, generation), null, 2);
   }
 
-  function fetchBackup(settings) {
+  // мягкое чтение облачной копии: null, если её ещё нет (404)
+  function readCloudBackup(settings) {
     var c = conf(settings);
     var url = 'https://api.github.com/repos/' + c.repo + '/contents/backup/data.json';
     return fetch(url, { headers: headers(c) }).then(function (r) {
-      if (r.status === 404) throw new Error('Резервной копии в архиве ещё нет.');
+      if (r.status === 404) return null;
       if (!r.ok) throw new Error('GitHub ' + r.status);
       return r.json();
     }).then(function (j) {
+      if (j === null) return null;
       var content = String(j.content || '').replace(/\s/g, '');
-      if (content) {
-        return JSON.parse(decodeURIComponent(escape(atob(content))));
-      }
+      if (content) return JSON.parse(decodeURIComponent(escape(atob(content))));
       // файл >1 МБ: Contents API не вернул содержимое — тянем сырой по ссылке
-      // (на случай старых «тяжёлых» бэкапов, сделанных до облегчения)
       if (j.download_url) {
         return fetch(j.download_url).then(function (raw) {
           if (!raw.ok) throw new Error('GitHub ' + raw.status);
@@ -195,7 +176,48 @@ window.MetapelSync = (function () {
         });
       }
       throw new Error('Не удалось прочитать резервную копию.');
-    }).then(function (data) {
+    });
+  }
+
+  // заливает backup/data.json, если данные изменились И эта копия не старше облачной
+  function backupIfChanged(settings, store, hashFn) {
+    if (!isOn(settings)) return Promise.resolve(false);
+    // не затираем облачную копию пустыми/начальными данными (свежее устройство до
+    // восстановления): быстрый путь без сетевого чтения
+    var empty = Object.keys(store.loadLog()).length === 0 &&
+                store.loadExtras().length === 0 &&
+                store.loadReturns().length === 0;
+    if (empty) return Promise.resolve(false);
+    // хэш только СОДЕРЖИМОГО (generation=0), чтобы рост версии не вызывал лишних заливок
+    var dataHash = hashFn(buildBackupJson(settings, store, 0));
+    if (store.getMeta('lastBackupHash') === dataHash) return Promise.resolve(false);
+    return readCloudBackup(settings).then(function (cloud) {
+      var cloudGen = (cloud && typeof cloud.generation === 'number') ? cloud.generation : -1;
+      var localGen = store.getMeta('backupGeneration') || 0;
+      // устройство отстало от облака — НЕ затираем более свежую чужую историю
+      // (устаревший ПК / свежее устройство, на котором ещё не восстанавливались)
+      if (cloud && cloudGen > localGen) {
+        store.setMeta('lastSyncError',
+          'Облачная копия новее этого устройства — нажмите «Восстановить» перед изменениями.');
+        return false;
+      }
+      var newGen = Math.max(cloudGen, localGen) + 1;
+      var json = buildBackupJson(settings, store, newGen);
+      return putFile(conf(settings), 'backup/data.json', json, 'Data backup gen ' + newGen).then(function () {
+        store.setMeta('backupGeneration', newGen);
+        store.setMeta('lastBackupHash', dataHash);
+        store.setMeta('lastSyncError', null);
+        return true;
+      });
+    }).catch(function (e) {
+      store.setMeta('lastSyncError', String(e && e.message || e));
+      return false;
+    });
+  }
+
+  function fetchBackup(settings) {
+    return readCloudBackup(settings).then(function (data) {
+      if (data === null) throw new Error('Резервной копии в архиве ещё нет.');
       if (!data || data.kind !== 'metapel-backup') throw new Error('Файл резервной копии повреждён.');
       return data;
     });

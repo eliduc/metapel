@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '2.9 от 13.06.2026';
+  var APP_VERSION = '3.0 от 13.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -229,9 +229,10 @@
     renderNav(occ);
     var content = $('#content');
     content.innerHTML = '';
-    if (activeTab === 'due') { blStatusCard(content); renderDue(occ, content); extrasBlock(content); }
+    if (activeTab === 'due') { blStatusCard(content); renderDue(occ, content); }
     else if (activeTab === 'upcoming') renderUpcoming(occ, content);
     else if (activeTab === 'history') renderHistory(content);
+    else if (activeTab === 'advance') renderAdvance(content);
     else if (activeTab === 'settings') renderSettings(content);
     maybeNotify(occ);
   }
@@ -259,6 +260,9 @@
     var badge = $('#badge-due');
     badge.textContent = dueCount;
     badge.style.display = dueCount ? '' : 'none';
+    // точка на вкладке «Под отчёт», пока за метапелем числятся деньги под отчёт
+    var badgeA = $('#badge-advance');
+    if (badgeA) badgeA.style.display = advanceBalance() > 0 ? '' : 'none';
     document.querySelectorAll('.tab').forEach(function (b) {
       b.classList.toggle('active', b.dataset.tab === activeTab);
     });
@@ -437,7 +441,7 @@
     runSync();
   }
 
-  // блок «выдать деньги» + баланс «под отчёт» (на вкладке «Платить»)
+  // баланс «под отчёт»: выдано под отчёт минус принятые отчёты (подарки не в счёт)
   function advanceBalance() {
     var given = extras.reduce(function (s, e) {
       return e.kind === 'advance' ? s + e.amount : s;
@@ -446,10 +450,13 @@
     return C.round2(given - back);
   }
 
-  function extrasBlock(content) {
+  // отдельная вкладка «Под отчёт»: баланс, выдача денег (подарок/под отчёт),
+  // приём отчётов и список всех таких движений. Вынесено из «Платить», чтобы
+  // главный экран показывал только обязательные платежи.
+  function renderAdvance(content) {
     var bal = advanceBalance();
-    // карточка баланса видна ВСЕГДА (даже при нуле), чтобы её можно было найти
-    // на одном месте; при нуле — спокойный серый вид без «тревожного» жёлтого
+    // карточка баланса видна ВСЕГДА (даже при нуле); при нуле — спокойный серый
+    // вид без «тревожного» жёлтого
     var cardB = el('div', 'balance-card' + (bal === 0 ? ' balance-zero' : ''),
       bal === 0
         ? '🧾 Под отчёт у метапеля: <b>0 ₪</b>' +
@@ -465,6 +472,28 @@
     var btn = el('button', 'btn btn-extra', '➕ Выдать деньги — подарок или под отчёт');
     btn.addEventListener('click', openExtraModal);
     content.appendChild(btn);
+
+    // список движений: подарки, выдачи под отчёт и принятые отчёты (возвраты)
+    var items = [];
+    extras.forEach(function (e) { items.push({ kind: 'extra', id: e.id, rec: e, date: e.date }); });
+    returns.forEach(function (r) { items.push({ kind: 'return', id: r.id, rec: r, date: r.date }); });
+    if (!items.length) {
+      content.appendChild(el('div', 'empty', 'Выданных денег и отчётов пока нет.'));
+      return;
+    }
+    items.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+
+    var advTotal = extras.reduce(function (s, e) { return e.kind === 'advance' ? s + e.amount : s; }, 0);
+    var giftTotal = extras.reduce(function (s, e) { return e.kind === 'gift' ? s + e.amount : s; }, 0);
+    var retTotal = returns.reduce(function (s, r) { return s + r.amount; }, 0);
+    content.appendChild(el('div', 'summary',
+      'Выдано под отчёт: <b>' + C.fmtMoney(advTotal) + '</b>' +
+      (giftTotal ? ' · подарками: <b>' + C.fmtMoney(giftTotal) + '</b>' : '') +
+      (retTotal ? ' · принято отчётов: <b>' + C.fmtMoney(retTotal) + '</b>' : '')));
+
+    items.forEach(function (it) {
+      content.appendChild(it.kind === 'return' ? returnCard(it.rec) : historyCard(it));
+    });
   }
 
   function renderUpcoming(occ, content) {
@@ -501,17 +530,13 @@
     return line;
   }
 
+  // история обязательных платежей (зарплата, карманные, страховка и т.д.).
+  // Подарки, выдачи под отчёт и отчёты — на отдельной вкладке «Под отчёт».
   function renderHistory(content) {
     var items = [];
     Object.keys(log).forEach(function (id) {
       var r = log[id];
       items.push({ kind: 'scheduled', id: id, rec: r, date: r.paidDate });
-    });
-    extras.forEach(function (e) {
-      items.push({ kind: 'extra', id: e.id, rec: e, date: e.date });
-    });
-    returns.forEach(function (r) {
-      items.push({ kind: 'return', id: r.id, rec: r, date: r.date });
     });
     if (!items.length) {
       content.appendChild(el('div', 'empty', 'Оплаченных платежей пока нет.'));
@@ -519,24 +544,11 @@
     }
     items.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
 
-    var paidTotal = items.reduce(function (s, it) {
-      if (it.kind === 'scheduled') return s + it.rec.paidAmount;
-      if (it.kind === 'extra') return s + it.rec.amount;
-      return s;
-    }, 0);
-    var returnedTotal = returns.reduce(function (s, r) { return s + r.amount; }, 0);
+    var paidTotal = items.reduce(function (s, it) { return s + it.rec.paidAmount; }, 0);
     content.appendChild(el('div', 'summary',
-      'Всего выплачено: <b>' + C.fmtMoney(paidTotal) + '</b>' +
-      (returnedTotal ? ' · возвращено по отчётам: <b>' + C.fmtMoney(returnedTotal) + '</b>' : '') +
-      ' · записей: ' + items.length));
+      'Всего выплачено: <b>' + C.fmtMoney(paidTotal) + '</b> · записей: ' + items.length));
 
-    items.forEach(function (it) {
-      if (it.kind === 'return') {
-        content.appendChild(returnCard(it.rec));
-      } else {
-        content.appendChild(historyCard(it));
-      }
-    });
+    items.forEach(function (it) { content.appendChild(historyCard(it)); });
   }
 
   function returnCard(r) {
@@ -837,7 +849,7 @@
     $('#extra-method-transfer').classList.toggle('active', extraMethod === 'transfer');
     $('#extra-method-cash').classList.toggle('active', extraMethod === 'cash');
     $('#extra-kind-hint').textContent = extraKind === 'gift'
-      ? 'Подарок: отчёт не нужен, расписка по желанию (кнопка будет в «Оплачено»).'
+      ? 'Подарок: отчёт не нужен, расписка по желанию (кнопка будет в «Под отчёт»).'
       : 'Под отчёт: метапель отчитывается чеками или сдачей, сумма попадает в баланс.';
   }
 
@@ -1465,7 +1477,7 @@
     // переполнение хранилища не должно проходить молча
     S.setOnSaveError(function () {
       appAlert('Память устройства для приложения заполнена — последняя запись могла не сохраниться. ' +
-        'Проверьте «Оплачено» и сообщите родственникам.');
+        'Проверьте «Оплачено» / «Под отчёт» и сообщите родственникам.');
     });
     render();
     runSync(); // дослать расписки, не отправленные в прошлый раз

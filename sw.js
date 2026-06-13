@@ -3,7 +3,7 @@
  * Стратегия: сеть в приоритете (чтобы обновления доходили сразу),
  * при недоступности сети — копия из кэша.
  */
-var CACHE = 'metapel-shell-v12';
+var CACHE = 'metapel-shell-v13';
 var SHELL = [
   './',
   'index.html',

@@ -122,14 +122,28 @@ window.MetapelSync = (function () {
 
   // ---------- резервная копия всех данных ----------
 
+  // Картинки подписей (PNG dataURL, десятки КБ каждая) в общий бэкап НЕ кладём:
+  // сами подписи уже лежат отдельными файлами receipts/<id>.json. Иначе бэкап
+  // раздувается >1 МБ, и GitHub Contents API не отдаёт его на чтение (content:"").
+  // Вместо подписи оставляем флаг signatureArchived — статус «расписка получена ✓»
+  // при восстановлении сохраняется.
+  function lightenRecord(r) {
+    var c = JSON.parse(JSON.stringify(r));
+    if (c.signature) { c.signature = null; c.signatureArchived = true; }
+    return c;
+  }
+
   function buildBackupJson(settings, store) {
     var cleanSettings = JSON.parse(JSON.stringify(settings));
     if (cleanSettings.sync) cleanSettings.sync.token = ''; // токен не покидает устройство
+    var log = store.loadLog();
+    var lightLog = {};
+    Object.keys(log).forEach(function (id) { lightLog[id] = lightenRecord(log[id]); });
     return JSON.stringify({
       kind: 'metapel-backup',
       settings: cleanSettings,
-      log: store.loadLog(),
-      extras: store.loadExtras(),
+      log: lightLog,
+      extras: store.loadExtras().map(lightenRecord),
       returns: store.loadReturns()
     }, null, 2);
   }
@@ -157,9 +171,21 @@ window.MetapelSync = (function () {
       if (!r.ok) throw new Error('GitHub ' + r.status);
       return r.json();
     }).then(function (j) {
-      var jsonStr = decodeURIComponent(escape(atob(String(j.content || '').replace(/\s/g, ''))));
-      var data = JSON.parse(jsonStr);
-      if (data.kind !== 'metapel-backup') throw new Error('Файл резервной копии повреждён.');
+      var content = String(j.content || '').replace(/\s/g, '');
+      if (content) {
+        return JSON.parse(decodeURIComponent(escape(atob(content))));
+      }
+      // файл >1 МБ: Contents API не вернул содержимое — тянем сырой по ссылке
+      // (на случай старых «тяжёлых» бэкапов, сделанных до облегчения)
+      if (j.download_url) {
+        return fetch(j.download_url).then(function (raw) {
+          if (!raw.ok) throw new Error('GitHub ' + raw.status);
+          return raw.json();
+        });
+      }
+      throw new Error('Не удалось прочитать резервную копию.');
+    }).then(function (data) {
+      if (!data || data.kind !== 'metapel-backup') throw new Error('Файл резервной копии повреждён.');
       return data;
     });
   }

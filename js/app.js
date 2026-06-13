@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '1.9 от 13.06.2026';
+  var APP_VERSION = '2.0 от 13.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -661,6 +661,9 @@
     if (!currentPay || currentPay.type !== 'salary') return;
     var sats = parseInt($('#pay-sats').value, 10);
     if (isNaN(sats) || sats < 0) sats = 0;
+    // в месяце максимум 5 суббот: ручной ввод «55» вместо «5» не должен
+    // раздуть сумму — держим поле и сумму согласованными
+    if (sats > 5) { sats = 5; $('#pay-sats').value = sats; }
     $('#pay-amount').value = C.round2(currentPay.netPart + sats * currentPay.satRate);
     updatePayBig();
   }
@@ -968,7 +971,7 @@
           'недельный час ≈ 241 ₪ в месяц (2025). Сейчас зачёт: ' +
           C.fmtMoney(C.blMonthlyOffset(settings)) + ' в месяц.',
         fields: [
-        { path: 'bl.hoursPerWeek', label: 'Часов в неделю (когда утверждены)', type: 'number' },
+        { path: 'bl.hoursPerWeek', label: 'Часов в неделю (когда утверждены)', type: 'number', min: 0, max: MAX_BL_HOURS },
         { path: 'bl.hourValueMonth', label: 'Стоимость недельного часа, ₪ в месяц', type: 'number' },
         { path: 'bl.applyToSocial', label: 'Уменьшать также взносы, пикадон и хавраа', type: 'checkbox' }
       ] },
@@ -1112,11 +1115,15 @@
           input = el('input');
           input.type = f.type;
           if (f.type === 'number') input.step = 'any';
+          if (f.max != null) input.max = f.max;
+          if (f.min != null) input.min = f.min;
           input.value = getPath(settings, f.path);
         }
         input.id = fieldId;
         input.dataset.path = f.path;
         input.dataset.kind = f.type;
+        if (f.max != null) input.dataset.max = f.max;
+        if (f.min != null) input.dataset.min = f.min;
         row.appendChild(input);
         fs.appendChild(row);
       });
@@ -1205,6 +1212,10 @@
           appAlert('Проверьте числовые поля: «' + inp.previousSibling.textContent + '» не число.');
           return;
         }
+        // кламп к диапазону поля, если задан (напр. часы БЛ ≤ 26):
+        // опечатка вроде 260 иначе обнулила бы все выплаты
+        if (inp.dataset.min != null) value = Math.max(parseFloat(inp.dataset.min), value);
+        if (inp.dataset.max != null) value = Math.min(parseFloat(inp.dataset.max), value);
       } else if (kind === 'select') {
         value = inp.value;
         if (value === '') continue; // нет выбранной опции — оставить старое значение

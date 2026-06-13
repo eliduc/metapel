@@ -197,6 +197,11 @@ window.MetapelStore = (function () {
     if (parts.log) raw.log = parts.log;
     if (parts.extras) raw.extras = parts.extras;
     if (parts.returns) raw.returns = parts.returns;
+    // данные взяты из облака целиком — локальная очередь отправки расписок
+    // больше не актуальна (восстановленные расписки уже лежат в архиве).
+    // Иначе устаревшие элементы очереди при следующей синхронизации
+    // перезатёрли бы архивную расписку старой подписью.
+    raw.syncQueue = [];
     saveRaw(raw);
   }
 

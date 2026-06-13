@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '3.2 от 13.06.2026';
+  var APP_VERSION = '3.3 от 13.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -464,7 +464,12 @@
     if (cfg.records.length) {
       var toggle = el('div', 'balance-toggle', '📋 Из чего эта сумма ▾');
       head.appendChild(toggle);
+      // раскрывашка доступна и с клавиатуры/скринридера: настоящая роль кнопки,
+      // фокусируемость и реакция на Enter/Space (для пальца по iPad как было)
       head.className = 'balance-head clickable';
+      head.setAttribute('role', 'button');
+      head.setAttribute('tabindex', '0');
+      head.setAttribute('aria-expanded', 'false');
       details = el('div', 'balance-details');
       cfg.records.slice().sort(function (a, b) {
         return a.rec.date < b.rec.date ? 1 : -1; // новые сверху
@@ -473,9 +478,17 @@
           ? returnCard(it.rec)
           : historyCard({ kind: 'extra', id: it.rec.id, rec: it.rec, date: it.rec.date }));
       });
-      head.addEventListener('click', function () {
+      var toggleDetails = function () {
         var open = details.classList.toggle('open');
+        head.setAttribute('aria-expanded', open ? 'true' : 'false');
         toggle.textContent = open ? '📋 Из чего эта сумма ▴' : '📋 Из чего эта сумма ▾';
+      };
+      head.addEventListener('click', toggleDetails);
+      head.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar') {
+          ev.preventDefault();
+          toggleDetails();
+        }
       });
     }
     (cfg.buttons || []).forEach(function (b) { card.appendChild(b); });
@@ -650,12 +663,17 @@
     }
     var btn = el('button', 'link-undo', '↩ Отменить запись (нажали по ошибке)');
     btn.addEventListener('click', function () {
+      // нельзя удалить выдачу под отчёт, если по ней уже приняты возвраты:
+      // баланс «под отчёт» ушёл бы в минус (возвраты не привязаны к выдаче).
+      // Сначала надо отменить лишние возвраты во вкладке «Под отчёт».
+      if (it.kind === 'extra' && e.kind === 'advance' && advanceBalance() - e.amount < 0) {
+        appAlert('По этой выдаче уже приняты отчёты (возвраты). Сначала отмените возвраты — ' +
+          'иначе баланс «под отчёт» станет отрицательным.');
+        return;
+      }
       var q = it.kind === 'scheduled'
         ? 'Убрать отметку об оплате «' + e.title + '»? Платёж вернётся в напоминания.'
         : 'Удалить запись «' + e.title + '» на ' + C.fmtMoney(amount) + '?';
-      if (it.kind === 'extra' && e.kind === 'advance' && advanceBalance() - e.amount < 0) {
-        q += ' Внимание: по «под отчёт» уже приняты возвраты — баланс уйдёт в минус.';
-      }
       appConfirm(q, 'Да, отменить', function () {
         if (it.kind === 'scheduled') S.unmarkPaid(it.id);
         else S.deleteExtra(it.id);
@@ -1347,8 +1365,10 @@
     // actionGuard НЕ вызываем: кнопка идёт через appConfirm, чей «Да» уже
     // прошёл actionGuard — повторный вызов попал бы в 600-мс блокировку.
     // Без сети чистить кэш и снимать service worker нельзя — иначе после
-    // reload приложение не загрузится (офлайн-копии уже не будет).
-    if (navigator.onLine === false) {
+    // reload приложение не загрузится (офлайн-копии уже не будет). На file://
+    // service worker не регистрируется, обновление — это перечитывание файла
+    // с диска, сеть не нужна — там гард не применяем.
+    if (navigator.onLine === false && location.protocol !== 'file:') {
       appAlert('Нет интернета — обновить не получится. Подключитесь к сети и попробуйте снова.');
       return;
     }
@@ -1373,8 +1393,17 @@
         return fetch(f, { cache: 'reload' }).catch(function () { /* офлайн — не критично */ });
       }));
     }
-    function reloadNow() { location.reload(); }
-    clearCaches().then(dropWorkers).then(refetchShell).then(reloadNow, reloadNow);
+    // reload гарантирован таймаутом: если сеть «подвисла» (открытый, но не
+    // отвечающий сокет — captive-portal, мигающий мобильный) и refetchShell не
+    // завершился, через 4 с всё равно перезагрузим — свежую оболочку при
+    // следующем заходе заново закэширует sw.js. reloadOnce страхует от двойной
+    // перезагрузки, если успеют сработать и цепочка, и таймаут.
+    var reloaded = false;
+    function reloadOnce() { if (reloaded) return; reloaded = true; location.reload(); }
+    Promise.race([
+      clearCaches().then(dropWorkers).then(refetchShell),
+      new Promise(function (r) { setTimeout(r, 4000); })
+    ]).then(reloadOnce, reloadOnce);
   }
 
   // ---------- модальные окна и события ----------

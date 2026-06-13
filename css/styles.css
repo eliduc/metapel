@@ -319,6 +319,29 @@ nav {
   min-height: 56px;
 }
 
+/* Видимый индикатор фокуса для клавиатуры/внешней клавиатуры iPad и VoiceOver.
+   :focus-visible не срабатывает на касание/мышь — обычный вид кнопок не меняется,
+   так что для пожилого пользователя пальцем ничего не «прыгает». */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+.tab:focus-visible,
+.balance-head.clickable:focus-visible {
+  outline: 4px solid var(--accent);
+  outline-offset: 3px;
+}
+/* на залитых синих/зелёных/янтарных кнопках синий контур сливается — белый с ореолом */
+.btn-pay:focus-visible,
+.tab.active:focus-visible,
+.btn-sign:focus-visible,
+.btn-danger:focus-visible,
+.btn-return:focus-visible,
+.btn-give-advance:focus-visible,
+.btn-give-gift:focus-visible {
+  outline-color: #fff;
+  box-shadow: 0 0 0 7px rgba(29, 78, 216, 0.6);
+}
+
 /* ---------- модальные окна ---------- */
 
 .modal {

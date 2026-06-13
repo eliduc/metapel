@@ -193,12 +193,16 @@ window.MetapelSync = (function () {
   // заливает backup/data.json, если данные изменились И эта копия не старше облачной
   function backupIfChanged(settings, store, hashFn) {
     if (!isOn(settings)) return Promise.resolve(false);
-    // не затираем облачную копию пустыми/начальными данными (свежее устройство до
-    // восстановления): быстрый путь без сетевого чтения
+    // не затираем облачную копию пустыми/начальными данными СВЕЖЕГО устройства
+    // (ещё не бэкапилось и не восстанавливалось → backupGeneration не задан):
+    // быстрый путь без сетевого чтения. Но если устройство уже участвовало в
+    // бэкапе (generation>0), пустота — это осознанное удаление всех записей,
+    // и его НАДО донести до облака (иначе при restore удалённое «воскреснет»).
+    // От затирания более свежей чужой истории по-прежнему защищают CAS+generation.
     var empty = Object.keys(store.loadLog()).length === 0 &&
                 store.loadExtras().length === 0 &&
                 store.loadReturns().length === 0;
-    if (empty) return Promise.resolve(false);
+    if (empty && !(store.getMeta('backupGeneration') > 0)) return Promise.resolve(false);
     // хэш только СОДЕРЖИМОГО (generation=0), чтобы рост версии не вызывал лишних заливок
     var dataHash = hashFn(buildBackupJson(settings, store, 0));
     if (store.getMeta('lastBackupHash') === dataHash) return Promise.resolve(false);

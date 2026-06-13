@@ -217,11 +217,16 @@
     eq('sanitizeSettings: 260 ч → 26', C.sanitizeSettings(dirty).bl.hoursPerWeek, 26);
     var dirtyNeg = withBl(); dirtyNeg.bl.hoursPerWeek = -5;
     eq('sanitizeSettings: -5 ч → 0', C.sanitizeSettings(dirtyNeg).bl.hoursPerWeek, 0);
-    // кап зачёта: даже при абсурдной ставке зачёт не превышает базу и зарплата не обнуляется
+    // кап зачёта по нетто-зарплате (не по grossBase): абсурдная ставка не обнуляет зарплату
     var crazy = withBl(); crazy.bl.hourValueMonth = 2410; // опечатка вместо 241
-    eq('Кап зачёта: не больше grossBase 6443,85', C.blMonthlyOffset(crazy), 6443.85);
-    eq('При абсурдной ставке зарплата НЕ обнуляется (семья всё равно платит)',
+    eq('Кап зачёта: не больше нетто 6500', C.blMonthlyOffset(crazy), 6500);
+    eq('При абсурдной ставке зарплата НЕ обнуляется (остаётся шабат)',
       find(C.generateOccurrences(crazy, '2026-08-01', 60), 'salary-2026-07').amount > 0, true);
+    // легитимная ставка чуть выше порога старого (grossBase) капа НЕ занижает зачёт
+    var hiRate = withBl(); hiRate.bl.hourValueMonth = 250; // 26×250=6500 ≤ net
+    eq('Ставка 250: зачёт 6500 (не урезан до grossBase)', C.blMonthlyOffset(hiRate), 6500);
+    var midRate = withBl(); midRate.bl.hourValueMonth = 248; // 26×248=6448, между grossBase и net
+    eq('Ставка 248: зачёт 6448 не урезан до grossBase', C.blMonthlyOffset(midRate), 6448);
 
     // ---------- калькулятор окончания работы ----------
     eq('monthsBetween: ровно 18 месяцев', C.monthsBetween('2026-06-10', '2027-12-10'), 18);

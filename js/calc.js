@@ -217,11 +217,14 @@ window.MetapelCalc = (function () {
     var bl = settings.bl || {};
     if (!bl.approved) return 0; // часы ещё не утверждены — зачёта нет
     var off = round2((bl.hoursPerWeek || 0) * (bl.hourValueMonth || 0));
-    // страховка от абсурдного ввода (опечатка в часах/ставке): зачёт не может
-    // превышать базовую зарплату, иначе он обнулил бы вообще все выплаты, и
-    // приложение молча показало бы «платить нечего»
-    var base = (settings.types && settings.types.bituach) ? settings.types.bituach.grossBase : off;
-    return Math.min(off, base);
+    // страховка от абсурдного ввода (опечатка в часах/ставке): зачёт зарплаты
+    // не может превышать саму нетто-зарплату — иначе он обнулил бы все выплаты,
+    // и приложение молча показало бы «платить нечего». Базы взносов и пикадона
+    // защищены отдельно через Math.max(0, grossBase − зачёт), поэтому кап здесь
+    // именно по net, а НЕ по grossBase (иначе при ставке выше ~248 ₪ доплата
+    // семьи завышалась бы — переплата).
+    var cap = (settings.types && settings.types.salary) ? settings.types.salary.net : off;
+    return Math.min(off, cap);
   }
 
   // нормализация настроек при загрузке/восстановлении: часы из любого

@@ -51,28 +51,35 @@ window.MetapelSync = (function () {
     };
   }
 
-  function putFile(c, path, jsonStr, message) {
+  // casSha:
+  //   undefined — legacy-режим (расписки): берём свежий sha и перезаписываем;
+  //   строка/null — compare-and-swap: пишем с ИМЕННО этим sha; если файл изменился
+  //   с другого устройства между чтением и записью (sha устарел), GitHub вернёт
+  //   409/422 → бросаем ошибку и НЕ затираем чужую запись (защита от гонки).
+  function putFile(c, path, jsonStr, message, casSha) {
     var url = 'https://api.github.com/repos/' + c.repo + '/contents/' + path;
-    // если файл уже есть (переподпись) — нужен его sha
+    function doPut(sha) {
+      var body = { message: message, content: b64(jsonStr) };
+      if (sha) body.sha = sha;
+      return fetch(url, { method: 'PUT', headers: headers(c), body: JSON.stringify(body) })
+        .then(function (r) {
+          if (r.status === 409 || r.status === 422) {
+            throw new Error('Облачная копия изменилась с другого устройства — обновите страницу.');
+          }
+          if (!r.ok) {
+            return r.text().then(function (t) {
+              throw new Error('GitHub ' + r.status + ': ' + t.slice(0, 200));
+            });
+          }
+          return true;
+        });
+    }
+    if (typeof casSha !== 'undefined') return doPut(casSha);
+    // legacy: подтянуть текущий sha и перезаписать
     return fetch(url, { headers: headers(c) }).then(function (g) {
       if (g.status === 200) return g.json().then(function (j) { return j.sha; });
       return null;
-    }).then(function (sha) {
-      var body = { message: message, content: b64(jsonStr) };
-      if (sha) body.sha = sha;
-      return fetch(url, {
-        method: 'PUT',
-        headers: headers(c),
-        body: JSON.stringify(body)
-      });
-    }).then(function (r) {
-      if (!r.ok) {
-        return r.text().then(function (t) {
-          throw new Error('GitHub ' + r.status + ': ' + t.slice(0, 200));
-        });
-      }
-      return true;
-    });
+    }).then(doPut);
   }
 
   /**
@@ -156,7 +163,8 @@ window.MetapelSync = (function () {
     return JSON.stringify(buildBackupObject(settings, store, generation), null, 2);
   }
 
-  // мягкое чтение облачной копии: null, если её ещё нет (404)
+  // мягкое чтение облачной копии. Возвращает { data, sha }:
+  // data=null если копии ещё нет (404); sha нужен для compare-and-swap при записи.
   function readCloudBackup(settings) {
     var c = conf(settings);
     var url = 'https://api.github.com/repos/' + c.repo + '/contents/backup/data.json';
@@ -165,15 +173,18 @@ window.MetapelSync = (function () {
       if (!r.ok) throw new Error('GitHub ' + r.status);
       return r.json();
     }).then(function (j) {
-      if (j === null) return null;
+      if (j === null) return { data: null, sha: null };
+      var sha = j.sha || null;
       var content = String(j.content || '').replace(/\s/g, '');
-      if (content) return JSON.parse(decodeURIComponent(escape(atob(content))));
+      if (content) {
+        return { data: JSON.parse(decodeURIComponent(escape(atob(content)))), sha: sha };
+      }
       // файл >1 МБ: Contents API не вернул содержимое — тянем сырой по ссылке
       if (j.download_url) {
         return fetch(j.download_url).then(function (raw) {
           if (!raw.ok) throw new Error('GitHub ' + raw.status);
           return raw.json();
-        });
+        }).then(function (d) { return { data: d, sha: sha }; });
       }
       throw new Error('Не удалось прочитать резервную копию.');
     });
@@ -191,7 +202,8 @@ window.MetapelSync = (function () {
     // хэш только СОДЕРЖИМОГО (generation=0), чтобы рост версии не вызывал лишних заливок
     var dataHash = hashFn(buildBackupJson(settings, store, 0));
     if (store.getMeta('lastBackupHash') === dataHash) return Promise.resolve(false);
-    return readCloudBackup(settings).then(function (cloud) {
+    return readCloudBackup(settings).then(function (res) {
+      var cloud = res.data;
       var cloudGen = (cloud && typeof cloud.generation === 'number') ? cloud.generation : -1;
       var localGen = store.getMeta('backupGeneration') || 0;
       // устройство отстало от облака — НЕ затираем более свежую чужую историю
@@ -203,7 +215,9 @@ window.MetapelSync = (function () {
       }
       var newGen = Math.max(cloudGen, localGen) + 1;
       var json = buildBackupJson(settings, store, newGen);
-      return putFile(conf(settings), 'backup/data.json', json, 'Data backup gen ' + newGen).then(function () {
+      // CAS по прочитанному sha: если другое устройство залило между нашим чтением
+      // и записью — putFile бросит ошибку, и мы не затрём чужую запись (гонка)
+      return putFile(conf(settings), 'backup/data.json', json, 'Data backup gen ' + newGen, res.sha).then(function () {
         store.setMeta('backupGeneration', newGen);
         store.setMeta('lastBackupHash', dataHash);
         store.setMeta('lastSyncError', null);
@@ -216,7 +230,8 @@ window.MetapelSync = (function () {
   }
 
   function fetchBackup(settings) {
-    return readCloudBackup(settings).then(function (data) {
+    return readCloudBackup(settings).then(function (res) {
+      var data = res.data;
       if (data === null) throw new Error('Резервной копии в архиве ещё нет.');
       if (!data || data.kind !== 'metapel-backup') throw new Error('Файл резервной копии повреждён.');
       return data;

@@ -210,10 +210,29 @@ window.MetapelCalc = (function () {
   // ---------- зачёт часов Битуах Леуми ----------
 
   // сумма, которую покрывает организация по уходу за счёт часов БЛ, ₪/мес
+  // законный максимум часов по уходу (уровень 6, иностранный работник)
+  var BL_MAX_HOURS = 26;
+
   function blMonthlyOffset(settings) {
     var bl = settings.bl || {};
     if (!bl.approved) return 0; // часы ещё не утверждены — зачёта нет
-    return round2((bl.hoursPerWeek || 0) * (bl.hourValueMonth || 0));
+    var off = round2((bl.hoursPerWeek || 0) * (bl.hourValueMonth || 0));
+    // страховка от абсурдного ввода (опечатка в часах/ставке): зачёт не может
+    // превышать базовую зарплату, иначе он обнулил бы вообще все выплаты, и
+    // приложение молча показало бы «платить нечего»
+    var base = (settings.types && settings.types.bituach) ? settings.types.bituach.grossBase : off;
+    return Math.min(off, base);
+  }
+
+  // нормализация настроек при загрузке/восстановлении: часы из любого
+  // источника (бэкап, старый localStorage, ручной ввод) приводим к 0..26
+  function sanitizeSettings(settings) {
+    if (settings && settings.bl) {
+      var h = settings.bl.hoursPerWeek;
+      if (typeof h !== 'number' || isNaN(h) || h < 0) h = 0;
+      settings.bl.hoursPerWeek = Math.min(BL_MAX_HOURS, h);
+    }
+    return settings;
   }
 
   // доля зарплаты, которую семья платит из своих средств (0..1)
@@ -738,6 +757,8 @@ window.MetapelCalc = (function () {
     plural: plural,
     hashString: hashString,
     defaultSettings: defaultSettings,
+    sanitizeSettings: sanitizeSettings,
+    BL_MAX_HOURS: BL_MAX_HOURS,
     blMonthlyOffset: blMonthlyOffset,
     blFamilyShare: blFamilyShare,
     monthsBetween: monthsBetween,

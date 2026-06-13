@@ -212,6 +212,16 @@
     // при максимуме 26 ч зачёт (6266) меньше нетто (6500) — семья всё ещё доплачивает
     eq('26 ч: зачёт меньше нетто, доплата семьи положительна',
       find(C.generateOccurrences(withBl(), '2026-08-01', 60), 'salary-2026-07').amount > 1760, true);
+    // санитизация: завышенные часы из бэкапа/старых настроек приводятся к 26
+    var dirty = withBl(); dirty.bl.hoursPerWeek = 260;
+    eq('sanitizeSettings: 260 ч → 26', C.sanitizeSettings(dirty).bl.hoursPerWeek, 26);
+    var dirtyNeg = withBl(); dirtyNeg.bl.hoursPerWeek = -5;
+    eq('sanitizeSettings: -5 ч → 0', C.sanitizeSettings(dirtyNeg).bl.hoursPerWeek, 0);
+    // кап зачёта: даже при абсурдной ставке зачёт не превышает базу и зарплата не обнуляется
+    var crazy = withBl(); crazy.bl.hourValueMonth = 2410; // опечатка вместо 241
+    eq('Кап зачёта: не больше grossBase 6443,85', C.blMonthlyOffset(crazy), 6443.85);
+    eq('При абсурдной ставке зарплата НЕ обнуляется (семья всё равно платит)',
+      find(C.generateOccurrences(crazy, '2026-08-01', 60), 'salary-2026-07').amount > 0, true);
 
     // ---------- калькулятор окончания работы ----------
     eq('monthsBetween: ровно 18 месяцев', C.monthsBetween('2026-06-10', '2027-12-10'), 18);

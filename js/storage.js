@@ -65,7 +65,10 @@ window.MetapelStore = (function () {
   }
 
   function loadSettings() {
-    return mergeDeep(window.MetapelCalc.defaultSettings(), loadRaw().settings || {});
+    // санитизация закрывает разом восстановление из бэкапа и любые «тяжёлые»
+    // значения, уже лежащие в localStorage (напр. часы >26 из старых версий)
+    return window.MetapelCalc.sanitizeSettings(
+      mergeDeep(window.MetapelCalc.defaultSettings(), loadRaw().settings || {}));
   }
 
   function saveSettings(settings) {

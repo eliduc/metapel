@@ -129,7 +129,10 @@ window.MetapelSync = (function () {
   // при восстановлении сохраняется.
   function lightenRecord(r) {
     var c = JSON.parse(JSON.stringify(r));
-    if (c.signature) { c.signature = null; c.signatureArchived = true; }
+    // PNG выбрасываем ТОЛЬКО если расписка уже в архиве (synced) — её файл
+    // receipts/<id>.json на GitHub существует. Не отправленную подпись
+    // выбрасывать нельзя: она пропадёт при восстановлении (файла ещё нет)
+    if (c.signature && c.synced) { c.signature = null; c.signatureArchived = true; }
     return c;
   }
 

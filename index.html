@@ -94,8 +94,9 @@
   <!-- дополнительный платёж: подарок / под отчёт -->
   <div class="modal" id="modal-extra">
     <div class="modal-box">
-      <h2>➕ Выдать деньги</h2>
-      <div class="form-row">
+      <h2 id="extra-title">➕ Выдать деньги</h2>
+      <!-- тип выбирается кнопкой на вкладке «Под отчёт», поэтому переключатель скрыт -->
+      <div class="form-row" id="extra-kind-row" style="display:none">
         <label>Что это</label>
         <div class="method-toggle">
           <button type="button" class="method-btn" id="extra-kind-gift">🎁 Подарок</button>

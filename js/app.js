@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '3.0 от 13.06.2026';
+  var APP_VERSION = '3.1 от 13.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -450,50 +450,83 @@
     return C.round2(given - back);
   }
 
-  // отдельная вкладка «Под отчёт»: баланс, выдача денег (подарок/под отчёт),
-  // приём отчётов и список всех таких движений. Вынесено из «Платить», чтобы
-  // главный экран показывал только обязательные платежи.
+  // одна раскрывающаяся карточка-баланс: сумма + (по клику) список записей,
+  // из которых она сложилась. records — массив {type:'extra'|'return', rec}.
+  function collapsibleBalance(content, cfg) {
+    var bal = cfg.amount;
+    var card = el('div', 'balance-card ' + cfg.cls + (bal === 0 ? ' balance-zero' : ''));
+    var head = el('div', 'balance-head',
+      (bal === 0 ? cfg.zeroLabel : cfg.posLabel) + ': <b>' + C.fmtMoney(bal) + '</b>' +
+      '<div class="hint">' + (bal === 0 ? cfg.zeroHint : cfg.posHint) + '</div>');
+    card.appendChild(head);
+
+    var details = null;
+    if (cfg.records.length) {
+      var toggle = el('div', 'balance-toggle', '📋 Из чего эта сумма ▾');
+      head.appendChild(toggle);
+      head.className = 'balance-head clickable';
+      details = el('div', 'balance-details');
+      cfg.records.slice().sort(function (a, b) {
+        return a.rec.date < b.rec.date ? 1 : -1; // новые сверху
+      }).forEach(function (it) {
+        details.appendChild(it.type === 'return'
+          ? returnCard(it.rec)
+          : historyCard({ kind: 'extra', id: it.rec.id, rec: it.rec, date: it.rec.date }));
+      });
+      head.addEventListener('click', function () {
+        var open = details.classList.toggle('open');
+        toggle.textContent = open ? '📋 Из чего эта сумма ▴' : '📋 Из чего эта сумма ▾';
+      });
+    }
+    (cfg.buttons || []).forEach(function (b) { card.appendChild(b); });
+    content.appendChild(card);
+    if (details) content.appendChild(details);
+  }
+
+  // вкладка «Под отчёт»: два отдельных баланса — деньги под отчёт (выдачи минус
+  // принятые отчёты) и подарки (общая сумма). У каждого — раскрытие списка сумм
+  // и своя кнопка выдачи. Вынесено из «Платить».
   function renderAdvance(content) {
+    // --- баланс «под отчёт» ---
     var bal = advanceBalance();
-    // карточка баланса видна ВСЕГДА (даже при нуле); при нуле — спокойный серый
-    // вид без «тревожного» жёлтого
-    var cardB = el('div', 'balance-card' + (bal === 0 ? ' balance-zero' : ''),
-      bal === 0
-        ? '🧾 Под отчёт у метапеля: <b>0 ₪</b>' +
-          '<div class="hint">Сейчас под отчёт ничего не числится — всё отчитано или не выдавалось</div>'
-        : '🧾 На руках у метапеля под отчёт: <b>' + C.fmtMoney(bal) + '</b>' +
-          '<div class="hint">Выдано под отчёт минус возвраты (чеки, сдача)</div>');
+    var advRecords = [];
+    extras.forEach(function (e) { if (e.kind === 'advance') advRecords.push({ type: 'extra', rec: e }); });
+    returns.forEach(function (r) { advRecords.push({ type: 'return', rec: r }); });
+    var advButtons = [];
     if (bal > 0) {
       var rbtn = el('button', 'btn btn-return', '➖ Принять отчёт (чеки / сдача)');
       rbtn.addEventListener('click', openReturnModal);
-      cardB.appendChild(rbtn);
+      advButtons.push(rbtn);
     }
-    content.appendChild(cardB);
-    var btn = el('button', 'btn btn-extra', '➕ Выдать деньги — подарок или под отчёт');
-    btn.addEventListener('click', openExtraModal);
-    content.appendChild(btn);
-
-    // список движений: подарки, выдачи под отчёт и принятые отчёты (возвраты)
-    var items = [];
-    extras.forEach(function (e) { items.push({ kind: 'extra', id: e.id, rec: e, date: e.date }); });
-    returns.forEach(function (r) { items.push({ kind: 'return', id: r.id, rec: r, date: r.date }); });
-    if (!items.length) {
-      content.appendChild(el('div', 'empty', 'Выданных денег и отчётов пока нет.'));
-      return;
-    }
-    items.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
-
-    var advTotal = extras.reduce(function (s, e) { return e.kind === 'advance' ? s + e.amount : s; }, 0);
-    var giftTotal = extras.reduce(function (s, e) { return e.kind === 'gift' ? s + e.amount : s; }, 0);
-    var retTotal = returns.reduce(function (s, r) { return s + r.amount; }, 0);
-    content.appendChild(el('div', 'summary',
-      'Выдано под отчёт: <b>' + C.fmtMoney(advTotal) + '</b>' +
-      (giftTotal ? ' · подарками: <b>' + C.fmtMoney(giftTotal) + '</b>' : '') +
-      (retTotal ? ' · принято отчётов: <b>' + C.fmtMoney(retTotal) + '</b>' : '')));
-
-    items.forEach(function (it) {
-      content.appendChild(it.kind === 'return' ? returnCard(it.rec) : historyCard(it));
+    collapsibleBalance(content, {
+      cls: 'bc-advance',
+      amount: bal,
+      zeroLabel: '🧾 Под отчёт у метапеля', zeroHint: 'Сейчас под отчёт ничего не числится',
+      posLabel: '🧾 На руках под отчёт', posHint: 'Выдано под отчёт минус принятые отчёты (чеки, сдача)',
+      records: advRecords,
+      buttons: advButtons
     });
+    var giveAdv = el('button', 'btn btn-give-advance', '🧾 Выдать деньги под отчёт');
+    giveAdv.addEventListener('click', function () { openExtraModal('advance'); });
+    content.appendChild(giveAdv);
+
+    // --- баланс «подарки» (общая сумма, отчёт не нужен) ---
+    var giftTotal = C.round2(extras.reduce(function (s, e) {
+      return e.kind === 'gift' ? s + e.amount : s;
+    }, 0));
+    var giftRecords = [];
+    extras.forEach(function (e) { if (e.kind === 'gift') giftRecords.push({ type: 'extra', rec: e }); });
+    collapsibleBalance(content, {
+      cls: 'bc-gift',
+      amount: giftTotal,
+      zeroLabel: '🎁 Подарков выдано', zeroHint: 'Подарки метапелю пока не выдавались',
+      posLabel: '🎁 Подарков выдано всего', posHint: 'Сумма всех подарков — отчёт по ним не нужен',
+      records: giftRecords,
+      buttons: []
+    });
+    var giveGift = el('button', 'btn btn-give-gift', '🎁 Дать подарок');
+    giveGift.addEventListener('click', function () { openExtraModal('gift'); });
+    content.appendChild(giveGift);
   }
 
   function renderUpcoming(occ, content) {
@@ -832,12 +865,14 @@
 
   // ---------- дополнительные платежи (подарок / под отчёт) ----------
 
-  function openExtraModal() {
-    extraKind = 'gift';
+  function openExtraModal(kind) {
+    extraKind = kind || 'advance'; // тип задаёт кнопка, открывшая окно
     extraMethod = 'cash'; // доп. платежи по умолчанию наличными
     $('#extra-amount').value = '';
     $('#extra-date').value = today();
     $('#extra-note').value = '';
+    $('#extra-title').textContent = extraKind === 'gift'
+      ? '🎁 Дать подарок' : '🧾 Выдать деньги под отчёт';
     updateExtraButtons();
     $('#modal-extra').classList.add('open');
     updateScrollLock();

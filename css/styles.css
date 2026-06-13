@@ -14,6 +14,7 @@
   --green-dark: #166534;
   --red: #b91c1c;
   --amber: #b45309;
+  --gift: #7c3aed;
   --border: #cbd5e1;
 }
 
@@ -485,16 +486,22 @@ nav {
 
 /* дополнительные платежи и баланс «под отчёт» */
 
-.btn-extra {
-  background: var(--card-bg);
-  border: 2px dashed var(--accent);
-  color: var(--accent);
+/* две отдельные сплошные кнопки выдачи (в стиле приложения, без пунктира) */
+.btn-give-advance {
+  background: var(--accent);
+  color: #fff;
   width: 100%;
-  font-weight: 700;
-  margin: 10px 0 2px;
+  margin: 12px 0 24px;
 }
+.btn-give-advance:hover { background: #1e40af; }
 
-.btn-extra:hover { background: #eff6ff; }
+.btn-give-gift {
+  background: var(--gift);
+  color: #fff;
+  width: 100%;
+  margin: 12px 0 8px;
+}
+.btn-give-gift:hover { background: #5b21b6; }
 
 .balance-card {
   background: #fefce8;
@@ -505,11 +512,29 @@ nav {
   font-size: 21px;
 }
 
-/* спокойный вид, когда под отчёт ничего не числится */
+/* спокойный вид, когда сумма нулевая */
 .balance-card.balance-zero {
   background: #f1f5f9;
   border-color: var(--border);
 }
+
+/* подарочный баланс — фиолетовый, чтобы не путать с под-отчётом */
+.balance-card.bc-gift:not(.balance-zero) {
+  background: #f5f3ff;
+  border-color: var(--gift);
+}
+
+/* «из чего эта сумма» — раскрытие списка записей по клику на карточке */
+.balance-head.clickable { cursor: pointer; }
+.balance-toggle {
+  margin-top: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.bc-gift .balance-toggle { color: var(--gift); }
+.balance-details { display: none; margin: 0 0 12px; }
+.balance-details.open { display: block; }
 
 /* статус часов Битуах Леуми на главном экране */
 .bl-card {

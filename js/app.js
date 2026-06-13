@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '2.8 от 13.06.2026';
+  var APP_VERSION = '2.9 от 13.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -448,15 +448,20 @@
 
   function extrasBlock(content) {
     var bal = advanceBalance();
-    if (bal !== 0) {
-      var cardB = el('div', 'balance-card',
-        '🧾 На руках у метапеля под отчёт: <b>' + C.fmtMoney(bal) + '</b>' +
-        '<div class="hint">Выдано под отчёт минус возвраты (чеки, сдача)</div>');
+    // карточка баланса видна ВСЕГДА (даже при нуле), чтобы её можно было найти
+    // на одном месте; при нуле — спокойный серый вид без «тревожного» жёлтого
+    var cardB = el('div', 'balance-card' + (bal === 0 ? ' balance-zero' : ''),
+      bal === 0
+        ? '🧾 Под отчёт у метапеля: <b>0 ₪</b>' +
+          '<div class="hint">Сейчас под отчёт ничего не числится — всё отчитано или не выдавалось</div>'
+        : '🧾 На руках у метапеля под отчёт: <b>' + C.fmtMoney(bal) + '</b>' +
+          '<div class="hint">Выдано под отчёт минус возвраты (чеки, сдача)</div>');
+    if (bal > 0) {
       var rbtn = el('button', 'btn btn-return', '➖ Принять отчёт (чеки / сдача)');
       rbtn.addEventListener('click', openReturnModal);
       cardB.appendChild(rbtn);
-      content.appendChild(cardB);
     }
+    content.appendChild(cardB);
     var btn = el('button', 'btn btn-extra', '➕ Выдать деньги — подарок или под отчёт');
     btn.addEventListener('click', openExtraModal);
     content.appendChild(btn);

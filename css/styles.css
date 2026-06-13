@@ -489,6 +489,12 @@ nav {
   font-size: 21px;
 }
 
+/* спокойный вид, когда под отчёт ничего не числится */
+.balance-card.balance-zero {
+  background: #f1f5f9;
+  border-color: var(--border);
+}
+
 /* статус часов Битуах Леуми на главном экране */
 .bl-card {
   border-radius: 16px;

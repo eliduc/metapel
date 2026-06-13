@@ -243,6 +243,11 @@
     var defSal = find(C.generateOccurrences(withBl(), '2026-08-01', 60), 'salary-2026-07');
     eq('Разбивка net 6500: прямое вычитание без пометки',
       defSal.breakdown.join('|').indexOf('в пределах нетто') >= 0, false);
+    // частичный первый месяц: пропорция стоит в равенстве БЛ-строки, без «(пропорц.)»
+    var juneBd = find(C.generateOccurrences(withBl(), '2026-07-06', 60), 'salary-2026-06').breakdown;
+    var blLine = juneBd.filter(function (s) { return s.indexOf('Часы Битуах') >= 0; })[0] || '';
+    eq('Разбивка частичного месяца: пропорция 21/30 в равенстве БЛ-строки',
+      blLine.indexOf('21/30') >= 0 && blLine.indexOf('пропорц') < 0, true);
 
     // ---------- калькулятор окончания работы ----------
     eq('monthsBetween: ровно 18 месяцев', C.monthsBetween('2026-06-10', '2027-12-10'), 18);

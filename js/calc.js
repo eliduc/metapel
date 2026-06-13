@@ -304,16 +304,17 @@ window.MetapelCalc = (function () {
         // нетто-зарплатой (offPart капится по net)
         var rawMonth = round2((blSettings.hoursPerWeek || 0) * (blSettings.hourValueMonth || 0));
         var rawPart = workedDays === dim ? rawMonth : round2(rawMonth * workedDays / dim);
-        var prop = workedDays === dim ? '' : ' (пропорц.)';
+        // множитель пропорции выносим в само равенство (как в строке «Нетто»),
+        // чтобы «X × Y [× д/Д] = Z» читалось верным равенством, а не пряталось в «(пропорц.)»
+        var propFactor = workedDays === dim ? '' : (' × ' + workedDays + '/' + dim);
+        var blLead = 'Часы Битуах Леуми: ' + blSettings.hoursPerWeek + ' ч/нед × ' +
+          fmtMoney(blSettings.hourValueMonth) + propFactor;
         if (rawPart - offPart > 0.01) {
-          breakdown.push('Часы Битуах Леуми: ' + blSettings.hoursPerWeek + ' ч/нед × ' +
-            fmtMoney(blSettings.hourValueMonth) + prop + ' = ' + fmtMoney(rawPart));
+          breakdown.push(blLead + ' = ' + fmtMoney(rawPart));
           breakdown.push('Зачтено в пределах нетто-зарплаты: − ' + fmtMoney(offPart) +
             ' (платит организация по уходу)');
         } else {
-          breakdown.push('Часы Битуах Леуми: ' + blSettings.hoursPerWeek + ' ч/нед × ' +
-            fmtMoney(blSettings.hourValueMonth) + prop +
-            ' = − ' + fmtMoney(offPart) + ' (платит организация по уходу)');
+          breakdown.push(blLead + ' = − ' + fmtMoney(offPart) + ' (платит организация по уходу)');
         }
         breakdown.push('Доплата семьи: ' + fmtMoney(familyNet));
       }

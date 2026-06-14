@@ -1,0 +1,34 @@
+/*
+ * Единый источник правды о среде запуска: prod или stage.
+ * Среда определяется ПО ПУТИ — всё, что лежит под /stage/, считается staging.
+ * Благодаря этому один и тот же файл ведёт себя правильно и в корне сайта,
+ * и в папке /stage/: «повышение» версии — это просто копирование файлов
+ * между папками, ничего не надо переписывать вручную.
+ *
+ * Зачем: все проекты под eliduc.github.io делят ОДИН origin, а значит общий
+ * localStorage, общий CacheStorage и общие куки. Поэтому prod и stage нужно
+ * развести явно, иначе они затирали бы данные и кэши друг друга.
+ *
+ * Подключать ПЕРВЫМ скриптом в index.html (до calc/storage/sync/app).
+ */
+window.MetapelEnv = (function () {
+  'use strict';
+  var stage = location.pathname.indexOf('/stage/') !== -1;
+  return {
+    stage: stage,
+    name: stage ? 'stage' : 'prod',
+    // отдельный ключ данных на устройстве (origin общий — без этого затёрли бы)
+    storageKey: 'metapel-app-v1' + (stage ? '-stage' : ''),
+    // семейство имён кэшей service worker. sw.js определяет своё семейство сам
+    // (он worker и этот объект не видит); здесь — для страницы (forceRefresh),
+    // чтобы чистить кэши ТОЛЬКО своей среды, не трогая чужую.
+    cacheFamily: stage ? 'metapel-stage-shell-' : 'metapel-shell-',
+    // префикс путей в приватном репозитории данных: stage пишет в stage/backup
+    // и stage/receipts, не касаясь боевых backup/data.json и receipts/.
+    dataPrefix: stage ? 'stage/' : '',
+    // ВАЖНО на будущее: когда появится Telegram-канал — брать его адрес ИМЕННО
+    // отсюда. Тогда staging будет слать в свой канал, а не в боевой, и гонки
+    // между средами за один канал не возникнет. Пока канала нет — оба null.
+    telegramChannel: null
+  };
+})();

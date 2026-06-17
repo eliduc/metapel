@@ -21,8 +21,10 @@
   </table>
 
   <script src="../js/calc.js"></script>
+  <script src="../js/sync.js"></script>
   <script>
     var C = window.MetapelCalc;
+    var Sync = window.MetapelSync;
     var results = [];
 
     function eq(name, actual, expected) {
@@ -287,6 +289,25 @@
     // ---------- пароль ----------
     eq('Хэш пароля стабилен', C.hashString('1234') === C.hashString('1234'), true);
     eq('Хэш разных паролей различается', C.hashString('1234') !== C.hashString('1235'), true);
+
+    // ---------- автосинхронизация: решение decideSync ----------
+    function ds(o) { return Sync.decideSync(o); }
+    eq('decideSync: облака нет → defer (пусть пушит)',
+      ds({ cloudExists: false }), 'defer');
+    eq('decideSync: облако не новее (равно) → defer',
+      ds({ cloudExists: true, cloudGen: 3, localGen: 3, localEmpty: false, localHash: 'a', lastHash: 'a' }), 'defer');
+    eq('decideSync: облако старше → defer',
+      ds({ cloudExists: true, cloudGen: 2, localGen: 4, localEmpty: false, localHash: 'a', lastHash: 'a' }), 'defer');
+    eq('decideSync: облако новее, локально пусто → pull (лэптоп-зритель)',
+      ds({ cloudExists: true, cloudGen: 5, localGen: 0, localEmpty: true, localHash: 'e', lastHash: null }), 'pull');
+    eq('decideSync: облако новее, локально как при синхронизации → pull',
+      ds({ cloudExists: true, cloudGen: 5, localGen: 4, localEmpty: false, localHash: 'h', lastHash: 'h' }), 'pull');
+    eq('decideSync: облако новее, локально ИЗМЕНЕНО → conflict (не теряем правки)',
+      ds({ cloudExists: true, cloudGen: 5, localGen: 4, localEmpty: false, localHash: 'new', lastHash: 'old' }), 'conflict');
+    eq('decideSync: облако новее, локально есть данные но НЕ синхронизировались → conflict',
+      ds({ cloudExists: true, cloudGen: 5, localGen: 0, localEmpty: false, localHash: 'h', lastHash: null }), 'conflict');
+    eq('decideSync: облако новее на 1 после чистой синхронизации → pull',
+      ds({ cloudExists: true, cloudGen: 2, localGen: 1, localEmpty: false, localHash: 'x', lastHash: 'x' }), 'pull');
 
     // ---------- вывод ----------
     var table = document.getElementById('results');

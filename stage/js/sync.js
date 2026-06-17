@@ -249,11 +249,65 @@ window.MetapelSync = (function () {
     });
   }
 
+  // ---------- автоподтягивание свежей облачной копии ----------
+
+  // ЧИСТОЕ решение: нужно ли молча подтянуть облако (тестируется без сети).
+  // state: { cloudExists, cloudGen, localGen, localEmpty, localHash, lastHash }
+  //   'pull'     — облако новее, а локально терять нечего → безопасно подтянуть
+  //   'conflict' — облако новее, НО локально есть несохранённые изменения → не трогаем
+  //   'defer'    — облако не новее/нет → пусть решает backupIfChanged (пуш/ничего)
+  function decideSync(state) {
+    if (!state.cloudExists) return 'defer';
+    if (state.cloudGen <= state.localGen) return 'defer';
+    // Облако новее. Подтягивать (перезаписывать локальное) безопасно ТОЛЬКО если
+    // локально терять нечего: либо данных нет совсем, либо они в точности
+    // совпадают с последней синхронизацией (lastHash задан и совпал). Если же
+    // есть локальные данные без доказательства, что они уже синхронизированы
+    // (lastHash пуст ИЛИ хэш отличается) — это конфликт, молча НЕ перетираем
+    // (иначе потеряли бы несохранённые правки, напр. на ещё не синхронном iPad).
+    if (state.localEmpty) return 'pull';
+    if (state.lastHash && state.localHash === state.lastHash) return 'pull';
+    return 'conflict';
+  }
+
+  // Если в облаке более свежее поколение, а локально нет несохранённых правок —
+  // молча подтягивает облачные log/extras/returns (настройки не трогаем: токен
+  // и локальные параметры у каждого устройства свои, как и при ручном восстановлении).
+  // Возвращает {generation} при подтягивании, иначе null. Конфликт (локальные
+  // правки + облако новее) НЕ перезаписывает — это подсветит backupIfChanged
+  // обычным сообщением «Облачная копия новее — нажмите Восстановить».
+  function pullIfNewer(settings, store, hashFn) {
+    if (!isOn(settings)) return Promise.resolve(null);
+    return readCloudBackup(settings).then(function (res) {
+      var cloud = res.data;
+      if (!cloud || cloud.kind !== 'metapel-backup') return null;
+      var state = {
+        cloudExists: true,
+        cloudGen: (typeof cloud.generation === 'number') ? cloud.generation : -1,
+        localGen: store.getMeta('backupGeneration') || 0,
+        localEmpty: Object.keys(store.loadLog()).length === 0 &&
+                    store.loadExtras().length === 0 &&
+                    store.loadReturns().length === 0,
+        localHash: hashFn(buildBackupJson(settings, store, 0)),
+        lastHash: store.getMeta('lastBackupHash')
+      };
+      if (decideSync(state) !== 'pull') return null;
+      // безопасно: локально несохранённого нет. replaceData заодно чистит syncQueue.
+      store.replaceData({ log: cloud.log || {}, extras: cloud.extras || [], returns: cloud.returns || [] });
+      store.setMeta('backupGeneration', state.cloudGen);
+      store.setMeta('lastBackupHash', hashFn(buildBackupJson(settings, store, 0)));
+      store.setMeta('lastSyncError', null);
+      return { generation: state.cloudGen };
+    }).catch(function () { return null; }); // сеть/чтение упало — просто не тянем
+  }
+
   return {
     isOn: isOn,
     enqueue: enqueue,
     processQueue: processQueue,
     backupIfChanged: backupIfChanged,
+    pullIfNewer: pullIfNewer,
+    decideSync: decideSync,
     fetchBackup: fetchBackup
   };
 })();

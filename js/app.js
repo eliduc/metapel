@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '3.4 от 14.06.2026';
+  var APP_VERSION = '3.5 от 18.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -857,24 +857,39 @@
     if (syncInFlight) return;
     if (!window.MetapelSync.isOn(settings)) return;
     syncInFlight = true;
-    Object.keys(log).forEach(function (id) {
-      var r = log[id];
-      if (r.signature && !r.synced) {
-        window.MetapelSync.enqueue(S, 'log', id, id.replace(/-.*$/, ''), r, settings);
+    // 1) Автоподтягивание свежей облачной копии — только если включено для среды.
+    //    На проде autoSync=false → сразу null, поведение прежнее (ручное «Восстановить»).
+    var pullStep = (window.MetapelEnv && window.MetapelEnv.autoSync)
+      ? window.MetapelSync.pullIfNewer(settings, S, C.hashString)
+      : Promise.resolve(null);
+    pullStep.then(function (pulled) {
+      if (pulled) {
+        reloadData();
+        backgroundRender();
+        showToast('✓ Данные обновлены с другого устройства');
       }
-    });
-    extras.forEach(function (e) {
-      if (e.signature && !e.synced) {
-        window.MetapelSync.enqueue(S, 'extra', e.id, e.kind, e, settings);
-      }
-    });
-    window.MetapelSync.processQueue(settings, S, null).then(function (sent) {
-      return window.MetapelSync.backupIfChanged(settings, S, C.hashString).then(function (backedUp) {
-        syncInFlight = false;
-        if (sent > 0 || backedUp) {
-          reloadData();
-          backgroundRender();
+      // 2) (пере)поставить в очередь подписанные, но не отправленные расписки —
+      //    по актуальным данным (после возможного подтягивания).
+      Object.keys(log).forEach(function (id) {
+        var r = log[id];
+        if (r.signature && !r.synced) {
+          window.MetapelSync.enqueue(S, 'log', id, id.replace(/-.*$/, ''), r, settings);
         }
+      });
+      extras.forEach(function (e) {
+        if (e.signature && !e.synced) {
+          window.MetapelSync.enqueue(S, 'extra', e.id, e.kind, e, settings);
+        }
+      });
+      // 3) дослать расписки и 4) залить локальные изменения (если есть и не устарели)
+      return window.MetapelSync.processQueue(settings, S, null).then(function (sent) {
+        return window.MetapelSync.backupIfChanged(settings, S, C.hashString).then(function (backedUp) {
+          syncInFlight = false;
+          if (sent > 0 || backedUp) {
+            reloadData();
+            backgroundRender();
+          }
+        });
       });
     }).catch(function () {
       syncInFlight = false;

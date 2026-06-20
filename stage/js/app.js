@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '3.7 от 20.06.2026';
+  var APP_VERSION = '3.8 от 20.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -655,24 +655,36 @@
       // подгрузим картинку из архива по запросу (в общий бэкап её не кладут)
       var viewWrap = el('div', 'sig-view');
       var btnView = el('button', 'btn btn-light', '👁 Показать расписку');
+      var sigImg = null;   // кэш картинки после первой загрузки
+      var shown = false;
+      function setViewLabel() {
+        btnView.textContent = shown ? '🙈 Скрыть расписку' : '👁 Показать расписку';
+      }
       btnView.addEventListener('click', function () {
+        if (sigImg) { // уже загружена — просто переключаем видимость, без повторной загрузки
+          shown = !shown;
+          sigImg.style.display = shown ? '' : 'none';
+          setViewLabel();
+          return;
+        }
         btnView.disabled = true;
         btnView.textContent = '⏳ Загружаю расписку…';
         window.MetapelSync.fetchReceipt(settings, it.id).then(function (rec) {
+          btnView.disabled = false;
           if (rec && rec.signature) {
-            var img2 = el('img', 'sig-img');
-            img2.src = rec.signature;
-            img2.alt = 'Подпись метапеля';
-            viewWrap.innerHTML = '';
-            viewWrap.appendChild(img2);
+            sigImg = el('img', 'sig-img');
+            sigImg.src = rec.signature;
+            sigImg.alt = 'Подпись метапеля';
+            viewWrap.insertBefore(sigImg, btnView); // картинка над кнопкой «Скрыть»
+            shown = true;
+            setViewLabel();
           } else {
-            btnView.disabled = false;
-            btnView.textContent = '👁 Показать расписку';
+            setViewLabel();
             appAlert('В архиве нет картинки подписи для этой расписки.');
           }
         }).catch(function (err) {
           btnView.disabled = false;
-          btnView.textContent = '👁 Показать расписку';
+          setViewLabel();
           appAlert('Не удалось загрузить расписку из архива: ' + (err && err.message || err));
         });
       });

@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '3.9 от 20.06.2026';
+  var APP_VERSION = '3.9.1 от 20.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -1190,7 +1190,11 @@
       openPasswordModal();
       return;
     }
-    var form = el('div', 'settings-form');
+    // настоящий <form> (а не div), чтобы поля пароля/токена были внутри формы
+    // (требование Chrome). submit гасим — сохранение идёт по кнопкам (type=button).
+    var form = el('form', 'settings-form');
+    form.setAttribute('autocomplete', 'off');
+    form.addEventListener('submit', function (e) { e.preventDefault(); });
     settingsForm().forEach(function (sec) {
       var fs = el('fieldset');
       var legend = el('legend');
@@ -1282,8 +1286,10 @@
 
     var actions = el('div', 'settings-actions');
     var btnSave = el('button', 'btn btn-pay', 'Сохранить настройки');
+    btnSave.type = 'button';
     btnSave.addEventListener('click', function () { saveSettingsForm(form); });
     var btnReset = el('button', 'btn btn-undo', 'Сбросить к значениям по умолчанию');
+    btnReset.type = 'button';
     btnReset.addEventListener('click', function () {
       appConfirm('Вернуть все настройки к значениям по умолчанию? История оплат сохранится.',
         'Да, сбросить', function () {
@@ -1297,6 +1303,7 @@
     actions.appendChild(btnReset);
     if (window.MetapelSync.isOn(settings)) {
       var btnRestore = el('button', 'btn btn-light', '⟳ Восстановить данные из архива GitHub');
+      btnRestore.type = 'button';
       btnRestore.addEventListener('click', function () {
         appConfirm('Заменить данные на этом устройстве резервной копией из архива GitHub? ' +
           'Текущие записи будут перезаписаны.', 'Да, восстановить', function () {
@@ -1627,9 +1634,8 @@
     $('#hours-revert').addEventListener('click', revertHours);
     $('#pay-confirm').addEventListener('click', confirmPay);
     $('#pass-confirm').addEventListener('click', checkPassword);
-    $('#pass-input').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') checkPassword();
-    });
+    // поле пароля теперь внутри <form> — Enter шлёт submit; гасим перезагрузку и проверяем
+    $('#pass-form').addEventListener('submit', function (e) { e.preventDefault(); checkPassword(); });
     document.querySelectorAll('.modal-close').forEach(function (b) {
       b.addEventListener('click', closeModals);
     });

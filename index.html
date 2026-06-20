@@ -225,10 +225,12 @@
     <div class="modal-box">
       <h2>Вход в настройки</h2>
       <div class="muted">Этот раздел — для родственников, которые настраивают суммы.</div>
-      <div class="form-row">
-        <label for="pass-input">Пароль</label>
-        <input type="password" id="pass-input">
-      </div>
+      <form id="pass-form" autocomplete="off">
+        <div class="form-row">
+          <label for="pass-input">Пароль</label>
+          <input type="password" id="pass-input" autocomplete="off">
+        </div>
+      </form>
       <div class="error" id="pass-error" style="display:none">Неверный пароль.</div>
       <div class="hint" id="pass-hint" style="display:none">Пароль по умолчанию: 1234 — смените его в настройках.</div>
       <div class="modal-actions">

@@ -197,6 +197,52 @@ window.MetapelSync = (function () {
     });
   }
 
+  // Локальные данные «накрывают» облачные, если ВСЕ облачные записи есть локально
+  // и ни по одной из них локально не потеряна расписка, которая есть в облаке.
+  // Тогда писать локальную копию безопасно (ничего облачного не теряем), даже
+  // если локальный номер версии отстал. Это снимает «застревание»: устройство
+  // залило копию, но не успело записать у себя новый номер (закрыли приложение),
+  // и потом отказывалось дозаливать уже полученную расписку, считая себя «старее».
+  // Чистая функция (тестируется без сети).
+  function localSupersedesCloud(cloud, localLog, localExtras, localReturns) {
+    function received(r) { return !!(r && (r.signature || r.signatureArchived)); }
+    var cl = (cloud && cloud.log) || {};
+    var ce = (cloud && cloud.extras) || [];
+    var cr = (cloud && cloud.returns) || [];
+    // Состав записей должен СОВПАДАТЬ (равные наборы id). Если локально есть
+    // лишняя запись или какой-то нет — это добавление/удаление на другом
+    // устройстве, т.е. конфликт состава, а НЕ «локально просто свежее»; такое
+    // не затираем молча (вернём false → ручное «Восстановить»). Так мы не
+    // воскрешаем удалённое и не теряем чужие добавления.
+    var clIds = Object.keys(cl), llIds = Object.keys(localLog);
+    if (clIds.length !== llIds.length) return false;
+    for (var i = 0; i < clIds.length; i++) {
+      var id = clIds[i], lr = localLog[id], c = cl[id];
+      if (!lr) return false;
+      // деньги и дата оплаты ДОЛЖНЫ совпадать — иначе на другом устройстве
+      // правили сумму того же платежа; это конфликт контента, не затираем.
+      // (поля расписки signedDate/signature НЕ сверяем — им и положено
+      //  отличаться: легитимный случай «локально расписались, в облаке ещё нет».)
+      if (lr.paidAmount !== c.paidAmount || lr.paidDate !== c.paidDate) return false;
+      if (received(c) && !received(lr)) return false; // облачную расписку локально не теряем
+    }
+    if (ce.length !== localExtras.length) return false;
+    for (var j = 0; j < ce.length; j++) {
+      var le = null;
+      for (var k = 0; k < localExtras.length; k++) if (localExtras[k].id === ce[j].id) { le = localExtras[k]; break; }
+      if (!le) return false;
+      if (le.amount !== ce[j].amount || le.date !== ce[j].date) return false;
+      if (received(ce[j]) && !received(le)) return false;
+    }
+    if (cr.length !== localReturns.length) return false;
+    for (var m = 0; m < cr.length; m++) {
+      var ok = false;
+      for (var n = 0; n < localReturns.length; n++) if (localReturns[n].id === cr[m].id) { ok = true; break; }
+      if (!ok) return false;
+    }
+    return true;
+  }
+
   // заливает backup/data.json, если данные изменились И эта копия не старше облачной
   function backupIfChanged(settings, store, hashFn) {
     if (!isOn(settings)) return Promise.resolve(false);
@@ -217,9 +263,14 @@ window.MetapelSync = (function () {
       var cloud = res.data;
       var cloudGen = (cloud && typeof cloud.generation === 'number') ? cloud.generation : -1;
       var localGen = store.getMeta('backupGeneration') || 0;
-      // устройство отстало от облака — НЕ затираем более свежую чужую историю
-      // (устаревший ПК / свежее устройство, на котором ещё не восстанавливались)
-      if (cloud && cloudGen > localGen) {
+      // Номер облака выше нашего. Отказываемся затирать чужую историю ТОЛЬКО
+      // если локально мы её не накрываем (в облаке есть данные/расписки, которых
+      // у нас нет) — тогда просим «Восстановить». Но если локальные данные
+      // накрывают облачные (всё облачное есть у нас, и расписки не потеряны),
+      // значит мы на самом деле свежее — просто номер отстал; пишем свою копию,
+      // ничего облачного не теряя (CAS по sha по-прежнему защищает от гонки).
+      if (cloud && cloudGen > localGen &&
+          !localSupersedesCloud(cloud, store.loadLog(), store.loadExtras(), store.loadReturns())) {
         store.setMeta('lastSyncError',
           'Облачная копия новее этого устройства — нажмите «Восстановить» перед изменениями.');
         return false;
@@ -332,6 +383,7 @@ window.MetapelSync = (function () {
     backupIfChanged: backupIfChanged,
     pullIfNewer: pullIfNewer,
     decideSync: decideSync,
+    localSupersedesCloud: localSupersedesCloud,
     fetchBackup: fetchBackup,
     fetchReceipt: fetchReceipt
   };

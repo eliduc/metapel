@@ -309,6 +309,44 @@
     eq('decideSync: облако новее на 1 после чистой синхронизации → pull',
       ds({ cloudExists: true, cloudGen: 2, localGen: 1, localEmpty: false, localHash: 'x', lastHash: 'x' }), 'pull');
 
+    // ---------- автосинхронизация: localSupersedesCloud (снятие «застревания») ----------
+    function ls(cloud, log, extras, returns) { return Sync.localSupersedesCloud(cloud, log, extras, returns); }
+    eq('superset: пустое облако накрывается всегда', ls({}, {}, [], []), true);
+    eq('superset: одинаковый состав и контент → true',
+      ls({ log: { p1: { paidAmount:100, paidDate:'2026-06-14', signatureArchived:true } } },
+         { p1: { paidAmount:100, paidDate:'2026-06-14', signatureArchived:true } }, [], []), true);
+    eq('superset: ИНЦИДЕНТ — локально p2 подписан, в облаке нет, остальное совпадает → true',
+      ls({ log: { p1:{paidAmount:100,paidDate:'2026-06-14',signatureArchived:true}, p2:{paidAmount:100,paidDate:'2026-06-20'} } },
+         { p1:{paidAmount:100,paidDate:'2026-06-14',signatureArchived:true}, p2:{paidAmount:100,paidDate:'2026-06-20',signature:'png'} }, [], []), true);
+    eq('superset: РАЗНАЯ СУММА того же id → false (не затираем чужую правку)',
+      ls({ log: { p1:{paidAmount:8000,paidDate:'2026-07-08',signatureArchived:true} } },
+         { p1:{paidAmount:5000,paidDate:'2026-07-08',signatureArchived:true} }, [], []), false);
+    eq('superset: разная ДАТА оплаты того же id → false',
+      ls({ log: { p1:{paidAmount:100,paidDate:'2026-06-15'} } },
+         { p1:{paidAmount:100,paidDate:'2026-06-14'} }, [], []), false);
+    eq('superset: облачной записи нет локально → false',
+      ls({ log: { p1:{}, p2:{} } }, { p1:{} }, [], []), false);
+    eq('superset: ЛОКАЛЬНО лишняя запись (удалена в облаке) → false (не воскрешаем)',
+      ls({ log: { p1:{} } }, { p1:{}, p2:{} }, [], []), false);
+    eq('superset: облако знает расписку, локально её нет → false',
+      ls({ log: { p1:{paidAmount:100,paidDate:'d',signatureArchived:true} } },
+         { p1:{paidAmount:100,paidDate:'d'} }, [], []), false);
+    eq('superset: облачного extra нет локально → false',
+      ls({ extras: [{ id:'e1', amount:50, date:'d' }] }, {}, [], []), false);
+    eq('superset: лишний локальный extra (удалён в облаке) → false',
+      ls({ extras: [] }, {}, [{ id:'e1', amount:50, date:'d' }], []), false);
+    eq('superset: extra — разная сумма → false',
+      ls({ extras: [{ id:'e1', amount:50, date:'d' }] }, {}, [{ id:'e1', amount:80, date:'d' }], []), false);
+    eq('superset: extra с распиской в облаке, локально нет → false',
+      ls({ extras: [{ id:'e1', amount:50, date:'d', signatureArchived:true }] }, {}, [{ id:'e1', amount:50, date:'d' }], []), false);
+    eq('superset: облачного возврата нет локально → false',
+      ls({ returns: [{ id:'r1' }] }, {}, [], []), false);
+    eq('superset: лишний локальный возврат (удалён в облаке) → false',
+      ls({ returns: [] }, {}, [], [{ id:'r1' }]), false);
+    eq('superset: всё совпадает (extra+возврат) → true',
+      ls({ extras:[{id:'e1',amount:50,date:'d',signatureArchived:true}], returns:[{id:'r1'}] },
+         {}, [{id:'e1',amount:50,date:'d',signatureArchived:true}], [{id:'r1'}]), true);
+
     // ---------- вывод ----------
     var table = document.getElementById('results');
     var passed = 0;

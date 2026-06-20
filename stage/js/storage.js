@@ -179,14 +179,18 @@ window.MetapelStore = (function () {
     saveRaw(raw);
   }
 
-  // пометить запись как сохранённую в архиве
+  // пометить запись как сохранённую в архиве. signatureArchived делаем
+  // ПОСТОЯННЫМ полем записи (а не вычисляемым на лету в lightenRecord) — так
+  // статус «расписка получена» не теряется, даже если очередная заливка бэкапа
+  // не успела пройти. markSynced вызывается только для подписанных расписок.
   function markSynced(targetType, id) {
     var raw = loadRaw();
     if (targetType === 'log' && raw.log && raw.log[id]) {
       raw.log[id].synced = true;
+      raw.log[id].signatureArchived = true;
     } else if (targetType === 'extra' && raw.extras) {
       raw.extras = raw.extras.map(function (e) {
-        if (e.id === id) e.synced = true;
+        if (e.id === id) { e.synced = true; e.signatureArchived = true; }
         return e;
       });
     }

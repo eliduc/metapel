@@ -511,6 +511,9 @@ select:focus-visible,
   margin-top: 8px;
 }
 
+/* кнопка/картинка «показать расписку» (подгрузка подписи из архива) */
+.sig-view { margin-top: 10px; }
+
 .btn-sign {
   background: var(--accent);
   color: #fff;

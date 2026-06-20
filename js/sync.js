@@ -249,6 +249,30 @@ window.MetapelSync = (function () {
     });
   }
 
+  // Читает отдельную расписку receipts/<id>.json из архива (картинку подписи
+  // в общий бэкап не кладут, поэтому на других устройствах её подгружаем по
+  // запросу). Только чтение — на запись/синхронизацию не влияет.
+  function fetchReceipt(settings, id) {
+    var c = conf(settings);
+    if (!c.repo || !c.token) return Promise.reject(new Error('Архив не настроен (нет токена).'));
+    var url = 'https://api.github.com/repos/' + c.repo + '/contents/' + receiptPath(id);
+    return fetch(url, { headers: headers(c) }).then(function (r) {
+      if (r.status === 404) throw new Error('Расписка не найдена в архиве.');
+      if (!r.ok) throw new Error('GitHub ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      var content = String(j.content || '').replace(/\s/g, '');
+      if (content) return JSON.parse(decodeURIComponent(escape(atob(content))));
+      if (j.download_url) {
+        return fetch(j.download_url).then(function (raw) {
+          if (!raw.ok) throw new Error('GitHub ' + raw.status);
+          return raw.json();
+        });
+      }
+      throw new Error('Не удалось прочитать расписку.');
+    });
+  }
+
   // ---------- автоподтягивание свежей облачной копии ----------
 
   // ЧИСТОЕ решение: нужно ли молча подтянуть облако (тестируется без сети).
@@ -308,6 +332,7 @@ window.MetapelSync = (function () {
     backupIfChanged: backupIfChanged,
     pullIfNewer: pullIfNewer,
     decideSync: decideSync,
-    fetchBackup: fetchBackup
+    fetchBackup: fetchBackup,
+    fetchReceipt: fetchReceipt
   };
 })();

@@ -11,7 +11,7 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '3.6 от 18.06.2026';
+  var APP_VERSION = '3.7 от 20.06.2026';
 
   // ---------- «сегодня» ----------
 
@@ -645,10 +645,39 @@
     head.appendChild(el('div', 'card-amount', C.fmtMoney(amount)));
     div.appendChild(head);
     if (e.signature) {
+      // подпись есть локально (это устройство расписывалось) — показываем сразу
       var img = el('img', 'sig-img');
       img.src = e.signature;
       img.alt = 'Подпись метапеля';
       div.appendChild(img);
+    } else if (e.signatureArchived && window.MetapelSync.isOn(settings)) {
+      // подпись есть в архиве, но не на этом устройстве (напр. лэптоп) —
+      // подгрузим картинку из архива по запросу (в общий бэкап её не кладут)
+      var viewWrap = el('div', 'sig-view');
+      var btnView = el('button', 'btn btn-light', '👁 Показать расписку');
+      btnView.addEventListener('click', function () {
+        btnView.disabled = true;
+        btnView.textContent = '⏳ Загружаю расписку…';
+        window.MetapelSync.fetchReceipt(settings, it.id).then(function (rec) {
+          if (rec && rec.signature) {
+            var img2 = el('img', 'sig-img');
+            img2.src = rec.signature;
+            img2.alt = 'Подпись метапеля';
+            viewWrap.innerHTML = '';
+            viewWrap.appendChild(img2);
+          } else {
+            btnView.disabled = false;
+            btnView.textContent = '👁 Показать расписку';
+            appAlert('В архиве нет картинки подписи для этой расписки.');
+          }
+        }).catch(function (err) {
+          btnView.disabled = false;
+          btnView.textContent = '👁 Показать расписку';
+          appAlert('Не удалось загрузить расписку из архива: ' + (err && err.message || err));
+        });
+      });
+      viewWrap.appendChild(btnView);
+      div.appendChild(viewWrap);
     }
     var actions = el('div', 'card-actions');
     if ((e.method || 'transfer') === 'cash' && !e.signature && !e.signatureArchived) {

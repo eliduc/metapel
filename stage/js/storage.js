@@ -160,6 +160,33 @@ window.MetapelStore = (function () {
     saveRaw(raw);
   }
 
+  // ---------- табели Битуах Леуми (метаданные; сами PDF — в репо) ----------
+
+  function loadTimesheets() {
+    return loadRaw().timesheets || [];
+  }
+
+  function addTimesheet(rec) {
+    var raw = loadRaw();
+    raw.timesheets = (raw.timesheets || []).concat([rec]);
+    saveRaw(raw);
+  }
+
+  function updateTimesheet(id, patch) {
+    var raw = loadRaw();
+    (raw.timesheets || []).forEach(function (t) {
+      if (t.id === id) { for (var k in patch) if (patch.hasOwnProperty(k)) t[k] = patch[k]; }
+    });
+    saveRaw(raw);
+  }
+
+  function deleteTimesheet(id) {
+    var raw = loadRaw();
+    raw.timesheets = (raw.timesheets || []).filter(function (t) { return t.id !== id; });
+    raw.syncQueue = (raw.syncQueue || []).filter(function (q) { return q.id !== id; });
+    saveRaw(raw);
+  }
+
   // ---------- очередь отправки расписок в архив GitHub ----------
 
   function loadSyncQueue() {
@@ -203,6 +230,7 @@ window.MetapelStore = (function () {
     if (parts.log) raw.log = parts.log;
     if (parts.extras) raw.extras = parts.extras;
     if (parts.returns) raw.returns = parts.returns;
+    if (parts.timesheets) raw.timesheets = parts.timesheets;
     // данные взяты из облака целиком — локальная очередь отправки расписок
     // больше не актуальна (восстановленные расписки уже лежат в архиве).
     // Иначе устаревшие элементы очереди при следующей синхронизации
@@ -227,6 +255,10 @@ window.MetapelStore = (function () {
     loadReturns: loadReturns,
     addReturn: addReturn,
     deleteReturn: deleteReturn,
+    loadTimesheets: loadTimesheets,
+    addTimesheet: addTimesheet,
+    updateTimesheet: updateTimesheet,
+    deleteTimesheet: deleteTimesheet,
     loadSyncQueue: loadSyncQueue,
     pushSync: pushSync,
     removeSync: removeSync,

@@ -133,7 +133,7 @@ nav {
   color: #fff;
 }
 
-#badge-due {
+#badge-due, #badge-timesheets {
   position: absolute;
   top: -10px;
   right: -4px;
@@ -695,6 +695,12 @@ select:focus-visible,
   gap: 12px;
   margin: 18px 0;
 }
+
+.ts-chip { display:inline-block; border-radius: 8px; padding: 3px 10px; font-size: 16px; font-weight: 600; }
+.ts-unsigned { background: #f1f5f9; color: var(--muted); }
+.ts-caregiver, .ts-family { background: #fef3c7; color: var(--amber); }
+.ts-full { background: #dcfce7; color: var(--green); }
+.ts-sent { background: #dbeafe; color: var(--accent); }
 
 @media (max-width: 520px) {
   body { font-size: 19px; }

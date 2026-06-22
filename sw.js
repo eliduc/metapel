@@ -8,7 +8,7 @@
 // eliduc.github.io они удаляли бы кэши друг друга при активации.
 var STAGE = self.location.pathname.indexOf('/stage/') !== -1;
 var CACHE_FAMILY = STAGE ? 'metapel-stage-shell-' : 'metapel-shell-';
-var CACHE = CACHE_FAMILY + 'v23';
+var CACHE = CACHE_FAMILY + 'v24';
 var SHELL = [
   './',
   'index.html',

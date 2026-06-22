@@ -162,7 +162,8 @@ window.MetapelSync = (function () {
       settings: cleanSettings,
       log: lightLog,
       extras: store.loadExtras().map(lightenRecord),
-      returns: store.loadReturns()
+      returns: store.loadReturns(),
+      timesheets: store.loadTimesheets()
     };
   }
 
@@ -204,7 +205,7 @@ window.MetapelSync = (function () {
   // залило копию, но не успело записать у себя новый номер (закрыли приложение),
   // и потом отказывалось дозаливать уже полученную расписку, считая себя «старее».
   // Чистая функция (тестируется без сети).
-  function localSupersedesCloud(cloud, localLog, localExtras, localReturns) {
+  function localSupersedesCloud(cloud, localLog, localExtras, localReturns, localTimesheets) {
     function received(r) { return !!(r && (r.signature || r.signatureArchived)); }
     var cl = (cloud && cloud.log) || {};
     var ce = (cloud && cloud.extras) || [];
@@ -240,6 +241,13 @@ window.MetapelSync = (function () {
       for (var n = 0; n < localReturns.length; n++) if (localReturns[n].id === cr[m].id) { ok = true; break; }
       if (!ok) return false;
     }
+    var ct = (cloud && cloud.timesheets) || [];
+    if (ct.length !== (localTimesheets || []).length) return false;
+    for (var p = 0; p < ct.length; p++) {
+      var okt = false;
+      for (var q = 0; q < localTimesheets.length; q++) if (localTimesheets[q].id === ct[p].id) { okt = true; break; }
+      if (!okt) return false;
+    }
     return true;
   }
 
@@ -254,7 +262,9 @@ window.MetapelSync = (function () {
     // От затирания более свежей чужой истории по-прежнему защищают CAS+generation.
     var empty = Object.keys(store.loadLog()).length === 0 &&
                 store.loadExtras().length === 0 &&
-                store.loadReturns().length === 0;
+                store.loadReturns().length === 0 &&
+                store.loadTimesheets().length === 0; // табель — тоже данные: свежее
+                // устройство только с табелем НЕ «пустое», иначе его не зальём в облако
     if (empty && !(store.getMeta('backupGeneration') > 0)) return Promise.resolve(false);
     // хэш только СОДЕРЖИМОГО (generation=0), чтобы рост версии не вызывал лишних заливок
     var dataHash = hashFn(buildBackupJson(settings, store, 0));
@@ -270,7 +280,7 @@ window.MetapelSync = (function () {
       // значит мы на самом деле свежее — просто номер отстал; пишем свою копию,
       // ничего облачного не теряя (CAS по sha по-прежнему защищает от гонки).
       if (cloud && cloudGen > localGen &&
-          !localSupersedesCloud(cloud, store.loadLog(), store.loadExtras(), store.loadReturns())) {
+          !localSupersedesCloud(cloud, store.loadLog(), store.loadExtras(), store.loadReturns(), store.loadTimesheets())) {
         store.setMeta('lastSyncError',
           'Облачная копия новее этого устройства — нажмите «Восстановить» перед изменениями.');
         return false;
@@ -324,6 +334,40 @@ window.MetapelSync = (function () {
     });
   }
 
+  function timesheetPath(id, suffix) {
+    return dataPrefix() + 'timesheets/' + id + (suffix || '') + '.json';
+  }
+
+  // заливает файл табеля (исходный или подписанный) в репозиторий данных.
+  // obj — { pdf: 'data:application/pdf;base64,...', fileName, month }.
+  function putTimesheetFile(settings, id, suffix, obj) {
+    if (!isOn(settings)) return Promise.reject(new Error('Архив не настроен (нет токена).'));
+    var json = JSON.stringify(obj);
+    return putFile(conf(settings), timesheetPath(id, suffix), json, 'Timesheet ' + id + (suffix || ''));
+  }
+
+  // читает файл табеля из репозитория данных. Возвращает разобранный объект.
+  function fetchTimesheetFile(settings, id, suffix) {
+    var c = conf(settings);
+    if (!c.repo || !c.token) return Promise.reject(new Error('Архив не настроен (нет токена).'));
+    var url = 'https://api.github.com/repos/' + c.repo + '/contents/' + timesheetPath(id, suffix);
+    return fetch(url, { headers: headers(c) }).then(function (r) {
+      if (r.status === 404) throw new Error('Файл табеля не найден в архиве.');
+      if (!r.ok) throw new Error('GitHub ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      var content = String(j.content || '').replace(/\s/g, '');
+      if (content) return JSON.parse(decodeURIComponent(escape(atob(content))));
+      if (j.download_url) {
+        return fetch(j.download_url).then(function (raw) {
+          if (!raw.ok) throw new Error('GitHub ' + raw.status);
+          return raw.json();
+        });
+      }
+      throw new Error('Не удалось прочитать файл табеля.');
+    });
+  }
+
   // ---------- автоподтягивание свежей облачной копии ----------
 
   // ЧИСТОЕ решение: нужно ли молча подтянуть облако (тестируется без сети).
@@ -362,13 +406,17 @@ window.MetapelSync = (function () {
         localGen: store.getMeta('backupGeneration') || 0,
         localEmpty: Object.keys(store.loadLog()).length === 0 &&
                     store.loadExtras().length === 0 &&
-                    store.loadReturns().length === 0,
+                    store.loadReturns().length === 0 &&
+                    store.loadTimesheets().length === 0, // несинхронизированный
+                    // локальный табель — это «есть что терять»: не отдаём pull'у
+                    // молча перезаписать его облачной копией (уходим в conflict)
+
         localHash: hashFn(buildBackupJson(settings, store, 0)),
         lastHash: store.getMeta('lastBackupHash')
       };
       if (decideSync(state) !== 'pull') return null;
       // безопасно: локально несохранённого нет. replaceData заодно чистит syncQueue.
-      store.replaceData({ log: cloud.log || {}, extras: cloud.extras || [], returns: cloud.returns || [] });
+      store.replaceData({ log: cloud.log || {}, extras: cloud.extras || [], returns: cloud.returns || [], timesheets: cloud.timesheets || [] });
       store.setMeta('backupGeneration', state.cloudGen);
       store.setMeta('lastBackupHash', hashFn(buildBackupJson(settings, store, 0)));
       store.setMeta('lastSyncError', null);
@@ -385,6 +433,8 @@ window.MetapelSync = (function () {
     decideSync: decideSync,
     localSupersedesCloud: localSupersedesCloud,
     fetchBackup: fetchBackup,
-    fetchReceipt: fetchReceipt
+    fetchReceipt: fetchReceipt,
+    putTimesheetFile: putTimesheetFile,
+    fetchTimesheetFile: fetchTimesheetFile
   };
 })();

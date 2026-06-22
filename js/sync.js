@@ -262,7 +262,9 @@ window.MetapelSync = (function () {
     // От затирания более свежей чужой истории по-прежнему защищают CAS+generation.
     var empty = Object.keys(store.loadLog()).length === 0 &&
                 store.loadExtras().length === 0 &&
-                store.loadReturns().length === 0;
+                store.loadReturns().length === 0 &&
+                store.loadTimesheets().length === 0; // табель — тоже данные: свежее
+                // устройство только с табелем НЕ «пустое», иначе его не зальём в облако
     if (empty && !(store.getMeta('backupGeneration') > 0)) return Promise.resolve(false);
     // хэш только СОДЕРЖИМОГО (generation=0), чтобы рост версии не вызывал лишних заливок
     var dataHash = hashFn(buildBackupJson(settings, store, 0));
@@ -404,7 +406,11 @@ window.MetapelSync = (function () {
         localGen: store.getMeta('backupGeneration') || 0,
         localEmpty: Object.keys(store.loadLog()).length === 0 &&
                     store.loadExtras().length === 0 &&
-                    store.loadReturns().length === 0,
+                    store.loadReturns().length === 0 &&
+                    store.loadTimesheets().length === 0, // несинхронизированный
+                    // локальный табель — это «есть что терять»: не отдаём pull'у
+                    // молча перезаписать его облачной копией (уходим в conflict)
+
         localHash: hashFn(buildBackupJson(settings, store, 0)),
         lastHash: store.getMeta('lastBackupHash')
       };

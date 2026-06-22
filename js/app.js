@@ -505,8 +505,29 @@
     if (details) content.appendChild(details);
   }
 
+  var TS_LABELS = { unsigned: 'не подписан', caregiver: 'подписан метапелем', family: 'подписан Григорием', full: 'полностью подписан', sent: 'отослано' };
+
   function renderTimesheets(content) {
-    content.appendChild(el('div', 'summary', 'Табели Битуах Леуми: ' + timesheets.length));
+    var btnUp = el('button', 'btn btn-extra', '⬆ Загрузить табель (PDF)');
+    btnUp.addEventListener('click', function () { $('#ts-file-input').click(); });
+    content.appendChild(btnUp);
+
+    if (!timesheets.length) {
+      content.appendChild(el('div', 'empty', 'Табелей пока нет. Загрузите присланный Матав PDF.'));
+      return;
+    }
+    timesheets.slice().sort(function (a, b) { return a.month < b.month ? 1 : -1; }).forEach(function (t) {
+      var card = el('div', 'card paid-card');
+      var head = el('div', 'card-head');
+      var left = el('div', 'card-left');
+      left.appendChild(el('div', 'card-title', '📋 Табель ' + esc(t.month)));
+      left.appendChild(el('div', 'card-due', 'загружен ' + C.fmtDate(t.uploadedDate)));
+      head.appendChild(left);
+      var st = C.timesheetStatus(t);
+      head.appendChild(el('div', 'ts-chip ts-' + st, TS_LABELS[st]));
+      card.appendChild(head);
+      content.appendChild(card);
+    });
   }
 
   // вкладка «Под отчёт»: два отдельных баланса — деньги под отчёт (выдачи минус
@@ -1645,6 +1666,35 @@
     $('#hours-input').addEventListener('input', updateHoursEffect);
     $('#hours-save').addEventListener('click', saveHours);
     $('#hours-revert').addEventListener('click', revertHours);
+
+    // загрузка табеля Битуах Леуми (PDF) — метаданные локально, файл в архив
+    $('#ts-file-input').addEventListener('change', function (e) {
+      var file = e.target.files && e.target.files[0];
+      e.target.value = ''; // позволить повторный выбор того же файла
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var id = 'ts-' + Date.now();
+        var month = C.parseISO(today()).getFullYear() + '-' +
+          ('0' + (C.parseISO(today()).getMonth() + 1)).slice(-2);
+        var rec = { id: id, month: month, fileName: file.name, uploadedDate: today(),
+          caregiverSigned: false, caregiverSignedDate: null, familySigned: false,
+          familySignedDate: null, sentMarked: false, sentDate: null };
+        S.addTimesheet(rec);
+        reloadData();
+        render();
+        showToast('✓ Табель загружен');
+        if (window.MetapelSync.isOn(settings)) {
+          window.MetapelSync.putTimesheetFile(settings, id, '', {
+            pdf: reader.result, fileName: file.name, month: month
+          }).then(function () { runSync(); }).catch(function (err) {
+            appAlert('Файл сохранён локально, но не залился в архив: ' + (err && err.message || err));
+          });
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
     $('#pay-confirm').addEventListener('click', confirmPay);
     $('#pass-confirm').addEventListener('click', checkPassword);
     // поле пароля теперь внутри <form> — Enter шлёт submit; гасим перезагрузку и проверяем

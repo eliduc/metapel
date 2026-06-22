@@ -28,6 +28,7 @@
   var log = S.loadLog();
   var extras = S.loadExtras();   // доп. платежи: подарки / под отчёт
   var returns = S.loadReturns(); // возвраты по отчёту (чеки, сдача)
+  var timesheets = [];
   var activeTab = 'due';
 
   // пароль настроек «помнится» заданное число минут (реальное время,
@@ -54,6 +55,7 @@
     log = S.loadLog();
     extras = S.loadExtras();
     returns = S.loadReturns();
+    timesheets = S.loadTimesheets();
   }
 
   var HORIZON_DAYS = 60;
@@ -233,6 +235,7 @@
     else if (activeTab === 'upcoming') renderUpcoming(occ, content);
     else if (activeTab === 'history') renderHistory(content);
     else if (activeTab === 'advance') renderAdvance(content);
+    else if (activeTab === 'timesheets') renderTimesheets(content);
     else if (activeTab === 'settings') renderSettings(content);
     maybeNotify(occ);
   }
@@ -263,6 +266,12 @@
     // точка на вкладке «Под отчёт», пока за метапелем числятся деньги под отчёт
     var badgeA = $('#badge-advance');
     if (badgeA) badgeA.style.display = advanceBalance() > 0 ? '' : 'none';
+    // бейдж табелей: полностью подписанные, но не отмеченные «Отослано»
+    var tsCount = timesheets.filter(function (t) {
+      return C.timesheetStatus(t) === 'full';
+    }).length;
+    var badgeT = $('#badge-timesheets');
+    if (badgeT) { badgeT.textContent = tsCount; badgeT.style.display = tsCount ? '' : 'none'; }
     document.querySelectorAll('.tab').forEach(function (b) {
       b.classList.toggle('active', b.dataset.tab === activeTab);
     });
@@ -494,6 +503,10 @@
     (cfg.buttons || []).forEach(function (b) { card.appendChild(b); });
     content.appendChild(card);
     if (details) content.appendChild(details);
+  }
+
+  function renderTimesheets(content) {
+    content.appendChild(el('div', 'summary', 'Табели Битуах Леуми: ' + timesheets.length));
   }
 
   // вкладка «Под отчёт»: два отдельных баланса — деньги под отчёт (выдачи минус

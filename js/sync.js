@@ -332,6 +332,40 @@ window.MetapelSync = (function () {
     });
   }
 
+  function timesheetPath(id, suffix) {
+    return dataPrefix() + 'timesheets/' + id + (suffix || '') + '.json';
+  }
+
+  // заливает файл табеля (исходный или подписанный) в репозиторий данных.
+  // obj — { pdf: 'data:application/pdf;base64,...', fileName, month }.
+  function putTimesheetFile(settings, id, suffix, obj) {
+    if (!isOn(settings)) return Promise.reject(new Error('Архив не настроен (нет токена).'));
+    var json = JSON.stringify(obj);
+    return putFile(conf(settings), timesheetPath(id, suffix), json, 'Timesheet ' + id + (suffix || ''));
+  }
+
+  // читает файл табеля из репозитория данных. Возвращает разобранный объект.
+  function fetchTimesheetFile(settings, id, suffix) {
+    var c = conf(settings);
+    if (!c.repo || !c.token) return Promise.reject(new Error('Архив не настроен (нет токена).'));
+    var url = 'https://api.github.com/repos/' + c.repo + '/contents/' + timesheetPath(id, suffix);
+    return fetch(url, { headers: headers(c) }).then(function (r) {
+      if (r.status === 404) throw new Error('Файл табеля не найден в архиве.');
+      if (!r.ok) throw new Error('GitHub ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      var content = String(j.content || '').replace(/\s/g, '');
+      if (content) return JSON.parse(decodeURIComponent(escape(atob(content))));
+      if (j.download_url) {
+        return fetch(j.download_url).then(function (raw) {
+          if (!raw.ok) throw new Error('GitHub ' + raw.status);
+          return raw.json();
+        });
+      }
+      throw new Error('Не удалось прочитать файл табеля.');
+    });
+  }
+
   // ---------- автоподтягивание свежей облачной копии ----------
 
   // ЧИСТОЕ решение: нужно ли молча подтянуть облако (тестируется без сети).
@@ -393,6 +427,8 @@ window.MetapelSync = (function () {
     decideSync: decideSync,
     localSupersedesCloud: localSupersedesCloud,
     fetchBackup: fetchBackup,
-    fetchReceipt: fetchReceipt
+    fetchReceipt: fetchReceipt,
+    putTimesheetFile: putTimesheetFile,
+    fetchTimesheetFile: fetchTimesheetFile
   };
 })();

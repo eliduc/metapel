@@ -347,6 +347,15 @@
       ls({ extras:[{id:'e1',amount:50,date:'d',signatureArchived:true}], returns:[{id:'r1'}] },
          {}, [{id:'e1',amount:50,date:'d',signatureArchived:true}], [{id:'r1'}]), true);
 
+    // ---------- табели: статус из флагов ----------
+    function tss(rec) { return C.timesheetStatus(rec); }
+    eq('timesheetStatus: пусто → unsigned', tss({}), 'unsigned');
+    eq('timesheetStatus: подписал метапель → caregiver', tss({ caregiverSigned: true }), 'caregiver');
+    eq('timesheetStatus: подписала семья → family', tss({ familySigned: true }), 'family');
+    eq('timesheetStatus: оба → full', tss({ caregiverSigned: true, familySigned: true }), 'full');
+    eq('timesheetStatus: отослано перекрывает → sent', tss({ caregiverSigned: true, familySigned: true, sentMarked: true }), 'sent');
+    eq('timesheetStatus: sent даже без подписей (защитно) → sent', tss({ sentMarked: true }), 'sent');
+
     // ---------- вывод ----------
     var table = document.getElementById('results');
     var passed = 0;

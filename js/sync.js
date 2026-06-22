@@ -162,7 +162,8 @@ window.MetapelSync = (function () {
       settings: cleanSettings,
       log: lightLog,
       extras: store.loadExtras().map(lightenRecord),
-      returns: store.loadReturns()
+      returns: store.loadReturns(),
+      timesheets: store.loadTimesheets()
     };
   }
 
@@ -204,7 +205,7 @@ window.MetapelSync = (function () {
   // залило копию, но не успело записать у себя новый номер (закрыли приложение),
   // и потом отказывалось дозаливать уже полученную расписку, считая себя «старее».
   // Чистая функция (тестируется без сети).
-  function localSupersedesCloud(cloud, localLog, localExtras, localReturns) {
+  function localSupersedesCloud(cloud, localLog, localExtras, localReturns, localTimesheets) {
     function received(r) { return !!(r && (r.signature || r.signatureArchived)); }
     var cl = (cloud && cloud.log) || {};
     var ce = (cloud && cloud.extras) || [];
@@ -240,6 +241,13 @@ window.MetapelSync = (function () {
       for (var n = 0; n < localReturns.length; n++) if (localReturns[n].id === cr[m].id) { ok = true; break; }
       if (!ok) return false;
     }
+    var ct = (cloud && cloud.timesheets) || [];
+    if (ct.length !== (localTimesheets || []).length) return false;
+    for (var p = 0; p < ct.length; p++) {
+      var okt = false;
+      for (var q = 0; q < localTimesheets.length; q++) if (localTimesheets[q].id === ct[p].id) { okt = true; break; }
+      if (!okt) return false;
+    }
     return true;
   }
 
@@ -270,7 +278,7 @@ window.MetapelSync = (function () {
       // значит мы на самом деле свежее — просто номер отстал; пишем свою копию,
       // ничего облачного не теряя (CAS по sha по-прежнему защищает от гонки).
       if (cloud && cloudGen > localGen &&
-          !localSupersedesCloud(cloud, store.loadLog(), store.loadExtras(), store.loadReturns())) {
+          !localSupersedesCloud(cloud, store.loadLog(), store.loadExtras(), store.loadReturns(), store.loadTimesheets())) {
         store.setMeta('lastSyncError',
           'Облачная копия новее этого устройства — нажмите «Восстановить» перед изменениями.');
         return false;
@@ -368,7 +376,7 @@ window.MetapelSync = (function () {
       };
       if (decideSync(state) !== 'pull') return null;
       // безопасно: локально несохранённого нет. replaceData заодно чистит syncQueue.
-      store.replaceData({ log: cloud.log || {}, extras: cloud.extras || [], returns: cloud.returns || [] });
+      store.replaceData({ log: cloud.log || {}, extras: cloud.extras || [], returns: cloud.returns || [], timesheets: cloud.timesheets || [] });
       store.setMeta('backupGeneration', state.cloudGen);
       store.setMeta('lastBackupHash', hashFn(buildBackupJson(settings, store, 0)));
       store.setMeta('lastSyncError', null);

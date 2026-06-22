@@ -310,7 +310,7 @@
       ds({ cloudExists: true, cloudGen: 2, localGen: 1, localEmpty: false, localHash: 'x', lastHash: 'x' }), 'pull');
 
     // ---------- автосинхронизация: localSupersedesCloud (снятие «застревания») ----------
-    function ls(cloud, log, extras, returns) { return Sync.localSupersedesCloud(cloud, log, extras, returns); }
+    function ls(cloud, log, extras, returns, timesheets) { return Sync.localSupersedesCloud(cloud, log, extras, returns, timesheets || []); }
     eq('superset: пустое облако накрывается всегда', ls({}, {}, [], []), true);
     eq('superset: одинаковый состав и контент → true',
       ls({ log: { p1: { paidAmount:100, paidDate:'2026-06-14', signatureArchived:true } } },
@@ -346,6 +346,21 @@
     eq('superset: всё совпадает (extra+возврат) → true',
       ls({ extras:[{id:'e1',amount:50,date:'d',signatureArchived:true}], returns:[{id:'r1'}] },
          {}, [{id:'e1',amount:50,date:'d',signatureArchived:true}], [{id:'r1'}]), true);
+    eq('superset: облачный табель есть локально → true',
+      ls({ timesheets: [{ id: 't1' }] }, {}, [], [], [{ id: 't1' }]), true);
+    eq('superset: облачного табеля нет локально → false',
+      ls({ timesheets: [{ id: 't1' }] }, {}, [], [], []), false);
+    eq('superset: лишний локальный табель (удалён в облаке) → false',
+      ls({ timesheets: [] }, {}, [], [], [{ id: 't1' }]), false);
+
+    // ---------- табели: статус из флагов ----------
+    function tss(rec) { return C.timesheetStatus(rec); }
+    eq('timesheetStatus: пусто → unsigned', tss({}), 'unsigned');
+    eq('timesheetStatus: подписал метапель → caregiver', tss({ caregiverSigned: true }), 'caregiver');
+    eq('timesheetStatus: подписала семья → family', tss({ familySigned: true }), 'family');
+    eq('timesheetStatus: оба → full', tss({ caregiverSigned: true, familySigned: true }), 'full');
+    eq('timesheetStatus: отослано перекрывает → sent', tss({ caregiverSigned: true, familySigned: true, sentMarked: true }), 'sent');
+    eq('timesheetStatus: sent даже без подписей (защитно) → sent', tss({ sentMarked: true }), 'sent');
 
     // ---------- вывод ----------
     var table = document.getElementById('results');

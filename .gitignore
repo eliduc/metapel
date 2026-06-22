@@ -3,3 +3,4 @@
 *.token
 *token*.txt
 *secret*
+.spike/

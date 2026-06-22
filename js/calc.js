@@ -117,6 +117,15 @@ window.MetapelCalc = (function () {
     return 'h' + (h >>> 0).toString(16);
   }
 
+  // статус табеля Битуах Леуми из флагов (чистая функция)
+  function timesheetStatus(rec) {
+    if (rec && rec.sentMarked) return 'sent';
+    if (rec && rec.caregiverSigned && rec.familySigned) return 'full';
+    if (rec && rec.caregiverSigned) return 'caregiver';
+    if (rec && rec.familySigned) return 'family';
+    return 'unsigned';
+  }
+
   // ---------- настройки по умолчанию ----------
 
   function defaultSettings() {
@@ -148,6 +157,8 @@ window.MetapelCalc = (function () {
       passwordHash: hashString('1234'),
       // архив расписок: приватный репозиторий GitHub (Contents API)
       sync: { enabled: false, repo: 'eliduc/metapel-data', token: '' },
+      // авто-отправка табелей в Матав (EmailJS); ключи только на устройстве
+      emailjs: { serviceId: '', templateId: '', publicKey: '', recipient: '' },
       types: {
         salary: {
           enabled: true, label: 'Зарплата',
@@ -778,6 +789,7 @@ window.MetapelCalc = (function () {
     monthLabel: monthLabel,
     plural: plural,
     hashString: hashString,
+    timesheetStatus: timesheetStatus,
     defaultSettings: defaultSettings,
     sanitizeSettings: sanitizeSettings,
     BL_MAX_HOURS: BL_MAX_HOURS,

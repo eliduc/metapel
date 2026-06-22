@@ -133,7 +133,7 @@ nav {
   color: #fff;
 }
 
-#badge-due {
+#badge-due, #badge-timesheets {
   position: absolute;
   top: -10px;
   right: -4px;
@@ -695,6 +695,26 @@ select:focus-visible,
   gap: 12px;
   margin: 18px 0;
 }
+
+.ts-chip { display:inline-block; border-radius: 8px; padding: 3px 10px; font-size: 16px; font-weight: 600; }
+.ts-unsigned { background: #f1f5f9; color: var(--muted); }
+.ts-caregiver, .ts-family { background: #fef3c7; color: var(--amber); }
+.ts-full { background: #dcfce7; color: var(--green); }
+.ts-sent { background: #dbeafe; color: var(--accent); }
+
+/* действия в карточке табеля */
+.ts-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.ts-act { width: 100%; }
+.ts-allsign { display: flex; align-items: center; gap: 8px; font-size: 17px; color: var(--muted);
+  background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+.ts-allsign input { width: 22px; height: 22px; }
+.ts-progress { font-size: 16px; color: var(--muted); }
+
+/* широкая модалка предпросмотра табеля */
+.modal-box-wide { max-width: 760px; }
+.ts-preview-wrap { max-height: 62vh; overflow: auto; border: 1px solid var(--line);
+  border-radius: 10px; background: #f1f5f9; margin: 8px 0; -webkit-overflow-scrolling: touch; }
+#ts-preview-canvas { display: block; width: 100%; height: auto; }
 
 @media (max-width: 520px) {
   body { font-size: 19px; }

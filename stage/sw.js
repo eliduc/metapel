@@ -8,7 +8,10 @@
 // eliduc.github.io они удаляли бы кэши друг друга при активации.
 var STAGE = self.location.pathname.indexOf('/stage/') !== -1;
 var CACHE_FAMILY = STAGE ? 'metapel-stage-shell-' : 'metapel-shell-';
-var CACHE = CACHE_FAMILY + 'v24';
+// Раздел «Табели» (этап 2/3) обкатывается только на stage: на проде версия
+// заморожена (v23), на stage — новее (v25). Тяжёлые pdf.js/pdf-lib/EmailJS в
+// SHELL не кладём — они грузятся лениво и кэшируются обычным fetch-обработчиком.
+var CACHE = CACHE_FAMILY + (STAGE ? 'v25' : 'v23');
 var SHELL = [
   './',
   'index.html',
@@ -17,6 +20,7 @@ var SHELL = [
   'js/calc.js',
   'js/storage.js',
   'js/sync.js',
+  'js/timesheet-sign.js',
   'js/app.js',
   'manifest.json',
   'icons/icon-180.png',

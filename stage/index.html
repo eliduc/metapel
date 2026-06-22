@@ -82,14 +82,27 @@
   <!-- расписка: подпись метапеля пальцем -->
   <div class="modal" id="modal-sign">
     <div class="modal-box">
-      <h2>✍ Расписка о получении</h2>
+      <h2 id="sign-title">✍ Расписка о получении</h2>
       <div class="sign-text" id="sign-text"></div>
       <canvas id="sign-canvas"></canvas>
-      <div class="hint">Метапель: распишитесь пальцем в рамке выше и нажмите ОК.</div>
+      <div class="hint" id="sign-hint">Метапель: распишитесь пальцем в рамке выше и нажмите ОК.</div>
       <div class="modal-actions">
         <button class="btn btn-pay" id="sign-ok">✓ ОК — деньги получил</button>
         <button class="btn btn-light" id="sign-clear">Стереть и расписаться заново</button>
         <button class="btn btn-undo" id="sign-later">Позже (расписаться потом)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- предпросмотр подписанного табеля -->
+  <div class="modal" id="modal-ts-preview">
+    <div class="modal-box modal-box-wide">
+      <h2>👁 Предпросмотр табеля</h2>
+      <div class="hint">Проверьте, что подписи встали по местам. Затем сохраните.</div>
+      <div class="ts-preview-wrap"><canvas id="ts-preview-canvas"></canvas></div>
+      <div class="modal-actions">
+        <button class="btn btn-pay" id="ts-preview-save">✓ Сохранить подписанный табель</button>
+        <button class="btn btn-undo" id="ts-preview-cancel">Отмена</button>
       </div>
     </div>
   </div>
@@ -246,6 +259,7 @@
   <script src="js/calc.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/sync.js"></script>
+  <script src="js/timesheet-sign.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

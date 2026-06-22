@@ -11,7 +11,11 @@
 
   // Поднимать при каждой публикации — по этой надписи внизу страницы
   // видно, что загрузилась новая версия, а не кэш.
-  var APP_VERSION = '3.9.1 от 20.06.2026';
+  // Раздел «Табели» пока обкатывается ТОЛЬКО на stage — поэтому версия, кэш и сама
+  // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
+  // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
+  var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.0 от 22.06.2026 (Табели: подпись+отправка)';
 
   // ---------- «сегодня» ----------
 
@@ -28,6 +32,7 @@
   var log = S.loadLog();
   var extras = S.loadExtras();   // доп. платежи: подарки / под отчёт
   var returns = S.loadReturns(); // возвраты по отчёту (чеки, сдача)
+  var timesheets = S.loadTimesheets(); // как log/extras/returns: грузим сразу, иначе уже сохранённый табель не виден до первого reloadData
   var activeTab = 'due';
 
   // пароль настроек «помнится» заданное число минут (реальное время,
@@ -47,6 +52,7 @@
   var currentPay = null;       // вхождение в диалоге оплаты
   var payMethod = 'transfer';  // выбранный способ в диалоге оплаты
   var currentSign = null;      // {type:'log'|'extra', id} — чья подпись ставится
+  var signCallback = null;     // если задан — окно подписи работает в режиме «вернуть PNG» (табели)
   var extraKind = 'gift';      // тип в диалоге доп. платежа
   var extraMethod = 'cash';    // способ в диалоге доп. платежа
 
@@ -54,6 +60,7 @@
     log = S.loadLog();
     extras = S.loadExtras();
     returns = S.loadReturns();
+    timesheets = S.loadTimesheets();
   }
 
   var HORIZON_DAYS = 60;
@@ -94,7 +101,11 @@
   function setPath(obj, path, value) {
     var keys = path.split('.');
     var o = obj;
-    for (var i = 0; i < keys.length - 1; i++) o = o[keys[i]];
+    for (var i = 0; i < keys.length - 1; i++) {
+      // создаём промежуточные объекты, если их нет (напр. новый раздел emailjs)
+      if (o[keys[i]] == null || typeof o[keys[i]] !== 'object') o[keys[i]] = {};
+      o = o[keys[i]];
+    }
     o[keys[keys.length - 1]] = value;
   }
 
@@ -233,6 +244,7 @@
     else if (activeTab === 'upcoming') renderUpcoming(occ, content);
     else if (activeTab === 'history') renderHistory(content);
     else if (activeTab === 'advance') renderAdvance(content);
+    else if (activeTab === 'timesheets') renderTimesheets(content);
     else if (activeTab === 'settings') renderSettings(content);
     maybeNotify(occ);
   }
@@ -263,6 +275,12 @@
     // точка на вкладке «Под отчёт», пока за метапелем числятся деньги под отчёт
     var badgeA = $('#badge-advance');
     if (badgeA) badgeA.style.display = advanceBalance() > 0 ? '' : 'none';
+    // бейдж табелей: полностью подписанные, но не отмеченные «Отослано»
+    var tsCount = timesheets.filter(function (t) {
+      return C.timesheetStatus(t) === 'full';
+    }).length;
+    var badgeT = $('#badge-timesheets');
+    if (badgeT) { badgeT.textContent = tsCount; badgeT.style.display = tsCount ? '' : 'none'; }
     document.querySelectorAll('.tab').forEach(function (b) {
       b.classList.toggle('active', b.dataset.tab === activeTab);
     });
@@ -494,6 +512,247 @@
     (cfg.buttons || []).forEach(function (b) { card.appendChild(b); });
     content.appendChild(card);
     if (details) content.appendChild(details);
+  }
+
+  var TS_LABELS = { unsigned: 'не подписан', caregiver: 'подписан метапелем', family: 'подписан Григорием', full: 'полностью подписан', sent: 'отослано' };
+
+  function findTimesheet(id) {
+    for (var i = 0; i < timesheets.length; i++) if (timesheets[i].id === id) return timesheets[i];
+    return null;
+  }
+
+  function tsBtn(label, cls, fn) {
+    var b = el('button', 'btn ' + cls + ' ts-act', label);
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  function renderTimesheets(content) {
+    var btnUp = el('button', 'btn btn-extra', '⬆ Загрузить табель (PDF)');
+    btnUp.addEventListener('click', function () { $('#ts-file-input').click(); });
+    content.appendChild(btnUp);
+
+    if (!timesheets.length) {
+      content.appendChild(el('div', 'empty', 'Табелей пока нет. Загрузите присланный Матав PDF.'));
+      return;
+    }
+    timesheets.slice().sort(function (a, b) { return a.month < b.month ? 1 : -1; }).forEach(function (t) {
+      var st = C.timesheetStatus(t);
+      var card = el('div', 'card paid-card');
+      var head = el('div', 'card-head');
+      var left = el('div', 'card-left');
+      left.appendChild(el('div', 'card-title', '📋 Табель ' + esc(t.month)));
+      left.appendChild(el('div', 'card-due', 'загружен ' + C.fmtDate(t.uploadedDate)));
+      head.appendChild(left);
+      head.appendChild(el('div', 'ts-chip ts-' + st, TS_LABELS[st]));
+      card.appendChild(head);
+
+      var acts = el('div', 'ts-actions');
+      if (st !== 'sent') {
+        if (!t.caregiverSigned) {
+          acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSign(t.id, 'caregiver', tsAllMode(card)); }));
+          var lbl = el('label', 'ts-allsign');
+          var cb = el('input'); cb.type = 'checkbox'; cb.checked = true; cb.className = 'ts-all-cb';
+          lbl.appendChild(cb);
+          lbl.appendChild(document.createTextNode(' Все подписи — расписаться один раз, поставить во все места'));
+          acts.appendChild(lbl);
+        }
+        if (!t.familySigned) {
+          acts.appendChild(tsBtn('✍ Подпись Григория (член семьи)', 'btn-give-gift', function () { tsSign(t.id, 'family', true); }));
+        }
+      }
+      if (t.caregiverSigned || t.familySigned) {
+        acts.appendChild(tsBtn('⬇ Скачать подписанный PDF', 'btn-light', function () { tsDownload(t.id); }));
+      }
+      if (st === 'full') {
+        acts.appendChild(tsBtn('📧 Отослать в Матав', 'btn-pay', function () { tsSend(t.id); }));
+        acts.appendChild(tsBtn('✓ Отметить «Отослано»', 'btn-light', function () { tsMarkSent(t.id); }));
+      }
+      if (st === 'sent') {
+        acts.appendChild(el('div', 'card-due', 'отослано ' + C.fmtDate(t.sentDate)));
+      }
+      card.appendChild(acts);
+      content.appendChild(card);
+    });
+  }
+
+  // читает чекбокс «Все подписи» внутри карточки метапеля
+  function tsAllMode(card) {
+    var cb = card.querySelector('.ts-all-cb');
+    return cb ? cb.checked : true;
+  }
+
+  // ---------- подписание табелей (Этап 2) ----------
+
+  function tsDateStr(iso) {
+    var d = C.parseISO(iso);
+    return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear();
+  }
+
+  // текущий PDF для подписи: подписанный (если кто-то уже подписал), иначе исходный
+  function tsFetchBase(t) {
+    var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
+    return window.MetapelSync.fetchTimesheetFile(settings, t.id, suffix).then(function (obj) {
+      return window.MetapelTimesheet.u8FromDataUrl(obj.pdf);
+    });
+  }
+
+  function tsSign(id, signer, allMode) {
+    if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена) — подпись табеля недоступна. Введите токен в настройках.'); return; }
+    var t = findTimesheet(id);
+    if (!t) return;
+    showToast('Загружаю бланк…');
+    tsFetchBase(t).then(function (baseU8) {
+      return window.MetapelTimesheet.parse(baseU8).then(function (parsed) {
+        if (!parsed.slots.length) { appAlert('В бланке не нашлось мест для подписи.'); return; }
+        if (allMode || signer === 'family') tsSignAll(t, baseU8, parsed, signer);
+        else tsSignIndividual(t, baseU8, parsed, signer);
+      });
+    }).catch(function (e) { appAlert('Не удалось загрузить/разобрать табель: ' + (e && e.message || e)); });
+  }
+
+  // «Все подписи»: одна роспись -> во все места этого подписанта
+  function tsSignAll(t, baseU8, parsed, signer) {
+    var title = signer === 'caregiver' ? '✍ Подпись Метапелет' : '✍ Подпись за Григория';
+    var desc = signer === 'caregiver'
+      ? 'Распишитесь <b>один раз</b> — подпись Джамшида встанет во все рабочие дни, недельные ячейки и подтверждение внизу.'
+      : 'Распишитесь <b>один раз</b> за Григория (член семьи) — в нижний блок בן/בת משפחה.';
+    openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (sig) {
+      var kinds = signer === 'caregiver' ? ['care-day', 'care-week', 'care-bottom'] : ['family'];
+      var opts = signer === 'caregiver' ? { dateText: tsDateStr(today()), dateAt: parsed.careDateAt } : {};
+      showToast('Расставляю подписи…');
+      window.MetapelTimesheet.stamp(baseU8, parsed.slots, kinds, sig, opts).then(function (signedU8) {
+        tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer); });
+      }).catch(function (e) { appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
+    });
+  }
+
+  // «По одному месту»: окно открывается на каждое место со своей надписью
+  function tsSignIndividual(t, baseU8, parsed, signer) {
+    var kinds = signer === 'caregiver' ? ['care-day', 'care-week', 'care-bottom'] : ['family'];
+    var slots = parsed.slots.filter(function (s) { return kinds.indexOf(s.kind) >= 0; });
+    var pairs = [], i = 0;
+    function next() {
+      if (i >= slots.length) {
+        var opts = signer === 'caregiver' ? { dateText: tsDateStr(today()), dateAt: parsed.careDateAt } : {};
+        showToast('Расставляю подписи…');
+        window.MetapelTimesheet.stampMulti(baseU8, pairs, opts).then(function (signedU8) {
+          tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer); });
+        }).catch(function (e) { appAlert('Ошибка расстановки: ' + (e && e.message || e)); });
+        return;
+      }
+      var s = slots[i];
+      openFingerSign('✍ Подпись ' + (i + 1) + ' из ' + slots.length, 'Место: <b>' + esc(s.label) + '</b>',
+        '✓ Дальше', 'Распишитесь за «' + esc(s.label) + '».', function (sig) {
+          pairs.push({ slot: s, sigDataUrl: sig }); i++; next();
+        });
+    }
+    next();
+  }
+
+  var tsPreviewSave = null;
+  function tsShowPreview(signedU8, onSave) {
+    tsPreviewSave = onSave;
+    $('#modal-ts-preview').classList.add('open');
+    updateScrollLock();
+    window.MetapelTimesheet.render(signedU8, $('#ts-preview-canvas'), 1.5)
+      .catch(function (e) { appAlert('Предпросмотр не отрисовался: ' + (e && e.message || e)); });
+  }
+
+  function tsSaveSigned(t, signedU8, signer) {
+    var dataUrl = window.MetapelTimesheet.bytesToDataUrl(signedU8, 'application/pdf');
+    showToast('Сохраняю подписанный табель…');
+    window.MetapelSync.putTimesheetFile(settings, t.id, '-signed', { pdf: dataUrl, fileName: t.fileName, month: t.month }).then(function () {
+      var patch = {};
+      if (signer === 'caregiver') { patch.caregiverSigned = true; patch.caregiverSignedDate = today(); }
+      else { patch.familySigned = true; patch.familySignedDate = today(); }
+      S.updateTimesheet(t.id, patch);
+      reloadData();
+      render();
+      showToast('✓ Подпись сохранена');
+      runSync();
+    }).catch(function (e) { appAlert('Не удалось сохранить подписанный табель: ' + (e && e.message || e)); });
+  }
+
+  // ---------- скачивание / отправка (Этап 3) ----------
+
+  function tsDownload(id) {
+    var t = findTimesheet(id);
+    if (!t) return;
+    if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена).'); return; }
+    var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
+    showToast('Готовлю файл…');
+    window.MetapelSync.fetchTimesheetFile(settings, id, suffix).then(function (obj) {
+      var u8 = window.MetapelTimesheet.u8FromDataUrl(obj.pdf);
+      var blob = new Blob([u8], { type: 'application/pdf' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = String(t.fileName || ('tabel-' + t.month)).replace(/\.pdf$/i, '') + (suffix ? '-signed' : '') + '.pdf';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(url); a.parentNode && a.parentNode.removeChild(a); }, 1500);
+    }).catch(function (e) { appAlert('Не удалось скачать: ' + (e && e.message || e)); });
+  }
+
+  function tsMarkSent(id) {
+    appConfirm('Отметить табель как отосланный в Матав?', '✓ Отослано', function () {
+      S.updateTimesheet(id, { sentMarked: true, sentDate: today() });
+      reloadData();
+      render();
+      showToast('✓ Отмечено: отослано');
+      runSync();
+    });
+  }
+
+  function tsSend(id) {
+    // авто-отправка через EmailJS (см. tsSendEmail); при отсутствии настроек —
+    // подсказываем запасной путь (скачать + отметить вручную)
+    tsSendEmail(id);
+  }
+
+  function tsLoadEmailJS() {
+    if (window.emailjs) return Promise.resolve();
+    return new Promise(function (res, rej) {
+      var s = document.createElement('script');
+      s.src = 'js/vendor/emailjs.min.js';
+      s.onload = function () { res(); };
+      s.onerror = function () { rej(new Error('EmailJS SDK не загрузился')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function tsSendEmail(id) {
+    var t = findTimesheet(id);
+    if (!t) return;
+    var ej = settings.emailjs || {};
+    if (!ej.serviceId || !ej.templateId || !ej.publicKey || !ej.recipient) {
+      appAlert('Авто-отправка (EmailJS) не настроена. Зайдите в Настройки → «Отправка в Матав (EmailJS)» и заполните поля. Либо нажмите «Скачать подписанный PDF», отправьте письмом вручную и отметьте «Отослано».');
+      return;
+    }
+    if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена).'); return; }
+    appConfirm('Отправить подписанный табель письмом в Матав (' + esc(ej.recipient) + ')?', '📧 Отправить', function () {
+      showToast('Готовлю и отправляю…');
+      var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
+      window.MetapelSync.fetchTimesheetFile(settings, id, suffix).then(function (obj) {
+        var b64 = String(obj.pdf).indexOf(',') >= 0 ? obj.pdf.split(',')[1] : obj.pdf;
+        return tsLoadEmailJS().then(function () {
+          return window.emailjs.send(ej.serviceId, ej.templateId, {
+            to_email: ej.recipient, recipient: ej.recipient, month: t.month,
+            filename: 'tabel-' + t.month + '-signed.pdf', content: b64
+          }, { publicKey: ej.publicKey });
+        });
+      }).then(function () {
+        S.updateTimesheet(id, { sentMarked: true, sentDate: today() });
+        reloadData();
+        render();
+        showToast('✓ Отослано в Матав');
+        runSync();
+      }).catch(function (e) {
+        appAlert('Не удалось отправить через EmailJS: ' + (e && (e.text || e.message) || e) +
+          '\n\nЗапасной путь: «Скачать подписанный PDF», отправить вручную, затем «Отметить Отослано».');
+      });
+    });
   }
 
   // вкладка «Под отчёт»: два отдельных баланса — деньги под отчёт (выдачи минус
@@ -828,11 +1087,30 @@
     return target.type === 'log' ? log[target.id] : findExtra(target.id);
   }
 
+  // Открывает окно подписи в режиме «вернуть PNG» (для табелей). onDone(pngDataUrl).
+  // Подпись с ПРОЗРАЧНЫМ фоном — чтобы накладывалась поверх бланка.
+  function openFingerSign(title, descHtml, okText, hintText, onDone) {
+    signCallback = onDone;
+    currentSign = null;
+    $('#sign-title').textContent = title;
+    $('#sign-text').innerHTML = descHtml || '';
+    $('#sign-ok').textContent = okText || '✓ Готово';
+    var hint = $('#sign-hint'); if (hint) hint.textContent = hintText || 'Распишитесь пальцем в рамке выше и нажмите кнопку.';
+    $('#modal-sign').classList.add('open');
+    updateScrollLock();
+    setupSignCanvas(true);
+  }
+
   function openSignModal(targetType, id) {
     var target = { type: targetType, id: id };
     var r = signRecord(target);
     if (!r) return;
+    signCallback = null;
     currentSign = target;
+    // вернуть «расписочные» подписи модалки (табели могли их поменять)
+    $('#sign-title').textContent = '✍ Расписка о получении';
+    $('#sign-ok').textContent = '✓ ОК — деньги получил';
+    var h = $('#sign-hint'); if (h) h.textContent = 'Метапель: распишитесь пальцем в рамке выше и нажмите ОК.';
     var what = 'наличными'; // обычный платёж
     if (r.kind === 'gift') what = 'в подарок';
     if (r.kind === 'advance') what = 'под отчёт';
@@ -846,15 +1124,18 @@
     setupSignCanvas();
   }
 
-  function setupSignCanvas() {
+  function setupSignCanvas(transparent) {
     var canvas = $('#sign-canvas');
     // внутреннее разрешение по фактическому размеру на экране
     var rect = canvas.getBoundingClientRect();
     canvas.width = Math.max(300, Math.round(rect.width));
-    canvas.height = 300;
+    canvas.height = 300; // задание width/height очищает холст в прозрачный
     signCtx = canvas.getContext('2d');
-    signCtx.fillStyle = '#ffffff';
-    signCtx.fillRect(0, 0, canvas.width, canvas.height);
+    if (!transparent) {
+      // расписки — на белом фоне; табели — прозрачный (накладываем на бланк)
+      signCtx.fillStyle = '#ffffff';
+      signCtx.fillRect(0, 0, canvas.width, canvas.height);
+    }
     signCtx.strokeStyle = '#1e293b';
     signCtx.lineWidth = 4.5;
     signCtx.lineCap = 'round';
@@ -875,6 +1156,14 @@
   function confirmSign() {
     if (!actionGuard()) return;
     if (!signInk) { appAlert('Сначала распишитесь пальцем в рамке.'); return; }
+    // режим табелей: вернуть PNG в колбэк, обычную «расписочную» логику пропускаем
+    if (signCallback) {
+      var data = $('#sign-canvas').toDataURL('image/png');
+      var cb = signCallback; signCallback = null;
+      closeModals();
+      cb(data);
+      return;
+    }
     if (!currentSign) { closeModals(); return; }
     var target = currentSign;
     var r = signRecord(target);
@@ -1119,6 +1408,18 @@
         { path: 'sync.repo', label: 'Репозиторий (владелец/имя)', type: 'text' },
         { path: 'sync.token', label: 'Токен доступа', type: 'password' }
       ] },
+      { section: '📧 Отправка табелей в Матав (EmailJS)', stageOnly: true,
+        hint: 'Авто-отправка подписанного табеля письмом. Нужен платный план EmailJS ' +
+          'с вложениями. Ключи берутся в кабинете emailjs.com и хранятся только на ' +
+          'этом устройстве. В шаблоне письма настройте динамическое вложение из ' +
+          'переменных {{content}} (base64) и {{filename}}; получателя — {{recipient}}. ' +
+          'Если не заполнено — табель можно скачать и отправить вручную.',
+        fields: [
+        { path: 'emailjs.serviceId', label: 'Service ID', type: 'text' },
+        { path: 'emailjs.templateId', label: 'Template ID', type: 'text' },
+        { path: 'emailjs.publicKey', label: 'Public Key', type: 'text' },
+        { path: 'emailjs.recipient', label: 'E-mail Матав (получатель)', type: 'text' }
+      ] },
       { section: 'Зарплата', enable: 'types.salary.enabled', fields: [
         { path: 'types.salary.net', label: 'Нетто в месяц, ₪', type: 'number' },
         { path: 'types.salary.shabbatRate', label: 'За субботу (шабат), ₪', type: 'number' },
@@ -1196,6 +1497,7 @@
     form.setAttribute('autocomplete', 'off');
     form.addEventListener('submit', function (e) { e.preventDefault(); });
     settingsForm().forEach(function (sec) {
+      if (sec.stageOnly && TS_STAGE_ONLY) return; // раздел только для среды с «Табелями»
       var fs = el('fieldset');
       var legend = el('legend');
       if (sec.enable) {
@@ -1483,6 +1785,8 @@
     document.querySelectorAll('.modal').forEach(function (m) { m.classList.remove('open'); });
     currentPay = null;
     currentSign = null;
+    signCallback = null;
+    tsPreviewSave = null;
     confirmCallback = null;
     updateScrollLock();
     // полсекунды игнорируем касания: «дребезг» пальца после закрытия окна
@@ -1497,6 +1801,12 @@
       document.title = 'STAGE · ' + document.title;
       var sb = el('div', 'stage-banner', '🧪 ТЕСТОВАЯ ВЕРСИЯ (STAGE) — данные отдельные от боевой');
       document.body.insertBefore(sb, document.body.firstChild);
+    }
+    // раздел «Табели» пока только на stage — на проде прячем вкладку
+    if (TS_STAGE_ONLY) {
+      var ttab = document.querySelector('.tab[data-tab="timesheets"]');
+      if (ttab) ttab.style.display = 'none';
+      if (activeTab === 'timesheets') activeTab = 'due';
     }
     document.querySelectorAll('.tab').forEach(function (b) {
       b.addEventListener('click', function () {
@@ -1565,8 +1875,17 @@
       canvas.addEventListener(ev, function () { signDrawing = false; });
     });
     $('#sign-ok').addEventListener('click', confirmSign);
-    $('#sign-clear').addEventListener('click', setupSignCanvas);
+    // «стереть»: пере-инициализировать в нужном режиме (табель — прозрачный фон)
+    $('#sign-clear').addEventListener('click', function () { setupSignCanvas(!!signCallback); });
     $('#sign-later').addEventListener('click', closeModals);
+    // предпросмотр подписанного табеля
+    $('#ts-preview-save').addEventListener('click', function () {
+      if (!actionGuard()) return;
+      var cb = tsPreviewSave; tsPreviewSave = null;
+      closeModals();
+      if (cb) cb();
+    });
+    $('#ts-preview-cancel').addEventListener('click', function () { tsPreviewSave = null; closeModals(); });
 
     // окно подтверждения
     $('#confirm-yes').addEventListener('click', function () {
@@ -1632,6 +1951,35 @@
     $('#hours-input').addEventListener('input', updateHoursEffect);
     $('#hours-save').addEventListener('click', saveHours);
     $('#hours-revert').addEventListener('click', revertHours);
+
+    // загрузка табеля Битуах Леуми (PDF) — метаданные локально, файл в архив
+    $('#ts-file-input').addEventListener('change', function (e) {
+      var file = e.target.files && e.target.files[0];
+      e.target.value = ''; // позволить повторный выбор того же файла
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var id = 'ts-' + Date.now();
+        var month = C.parseISO(today()).getFullYear() + '-' +
+          ('0' + (C.parseISO(today()).getMonth() + 1)).slice(-2);
+        var rec = { id: id, month: month, fileName: file.name, uploadedDate: today(),
+          caregiverSigned: false, caregiverSignedDate: null, familySigned: false,
+          familySignedDate: null, sentMarked: false, sentDate: null };
+        S.addTimesheet(rec);
+        reloadData();
+        render();
+        showToast('✓ Табель загружен');
+        if (window.MetapelSync.isOn(settings)) {
+          window.MetapelSync.putTimesheetFile(settings, id, '', {
+            pdf: reader.result, fileName: file.name, month: month
+          }).then(function () { runSync(); }).catch(function (err) {
+            appAlert('Файл сохранён локально, но не залился в архив: ' + (err && err.message || err));
+          });
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
     $('#pay-confirm').addEventListener('click', confirmPay);
     $('#pass-confirm').addEventListener('click', checkPassword);
     // поле пароля теперь внутри <form> — Enter шлёт submit; гасим перезагрузку и проверяем

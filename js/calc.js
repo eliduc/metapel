@@ -117,15 +117,6 @@ window.MetapelCalc = (function () {
     return 'h' + (h >>> 0).toString(16);
   }
 
-  // статус табеля Битуах Леуми из флагов (чистая функция)
-  function timesheetStatus(rec) {
-    if (rec && rec.sentMarked) return 'sent';
-    if (rec && rec.caregiverSigned && rec.familySigned) return 'full';
-    if (rec && rec.caregiverSigned) return 'caregiver';
-    if (rec && rec.familySigned) return 'family';
-    return 'unsigned';
-  }
-
   // ---------- настройки по умолчанию ----------
 
   function defaultSettings() {
@@ -787,7 +778,6 @@ window.MetapelCalc = (function () {
     monthLabel: monthLabel,
     plural: plural,
     hashString: hashString,
-    timesheetStatus: timesheetStatus,
     defaultSettings: defaultSettings,
     sanitizeSettings: sanitizeSettings,
     BL_MAX_HOURS: BL_MAX_HOURS,

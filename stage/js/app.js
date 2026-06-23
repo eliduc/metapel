@@ -15,7 +15,7 @@
   // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
   // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
   var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
-  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.6 от 23.06.2026 (Табели: пересборка из исходного, подпись не теряется)';
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.7 от 23.06.2026 (Табели: заметная кнопка загрузки + тело письма из кода)';
 
   // ---------- «сегодня» ----------
 
@@ -529,7 +529,7 @@
   }
 
   function renderTimesheets(content) {
-    var btnUp = el('button', 'btn btn-extra', '⬆ Загрузить табель (PDF)');
+    var btnUp = el('button', 'btn btn-upload', '⬆ Загрузить табель (PDF)');
     btnUp.addEventListener('click', function () { $('#ts-file-input').click(); });
     content.appendChild(btnUp);
 
@@ -730,9 +730,25 @@
         // base64). obj.pdf уже хранится в таком виде, поэтому шлём его как есть.
         var dataUri = String(obj.pdf);
         if (dataUri.indexOf('data:') !== 0) dataUri = 'data:application/pdf;base64,' + dataUri;
+        // Тему и тело письма (иврит, RTL) формируем ЗДЕСЬ, в коде, и шлём как
+        // переменные. В шаблоне EmailJS остаётся только «{{{subject}}}» и
+        // «{{{message_html}}}» (тройные фигурные = БЕЗ html-эскейпа, иначе «/»
+        // в 06/2026 превращался в &#x2F;, а визуальный редактор тела был хрупким
+        // и текст не сохранялся). Так весь текст письма — под контролем кода.
+        var monthSlash = tsMonthSlash(t.month);
+        var subject = 'יומן עבודה חתום — ' + monthSlash;
+        var messageHtml =
+          '<div dir="rtl" style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.7;color:#1f2937;">' +
+            '<p>לכבוד מטב,</p>' +
+            '<p>מצורף בזאת <b>יומן עבודה חתום</b> עבור המטופל <b>גריגורי רזומובסקי</b> לתקופה <b>' + monthSlash + '</b>.</p>' +
+            '<p>היומן חתום על ידי המטפל ועל ידי בן המשפחה.</p>' +
+            '<p>נא לאשר את קבלת המסמך. תודה רבה.</p>' +
+            '<p style="margin-top:18px;">בברכה,<br>משפחת רזומובסקי</p>' +
+          '</div>';
         return tsLoadEmailJS().then(function () {
           return window.emailjs.send(ej.serviceId, ej.templateId, {
-            to_email: ej.recipient, recipient: ej.recipient, month: tsMonthSlash(t.month),
+            to_email: ej.recipient, recipient: ej.recipient, month: monthSlash,
+            subject: subject, message_html: messageHtml,
             filename: 'tabel-' + t.month + '-signed.pdf', content: dataUri
           }, { publicKey: ej.publicKey });
         });

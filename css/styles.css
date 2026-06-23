@@ -348,7 +348,8 @@ select:focus-visible,
 .btn-danger:focus-visible,
 .btn-return:focus-visible,
 .btn-give-advance:focus-visible,
-.btn-give-gift:focus-visible {
+.btn-give-gift:focus-visible,
+.btn-upload:focus-visible {
   outline-color: #fff;
   box-shadow: 0 0 0 7px rgba(29, 78, 216, 0.6);
 }
@@ -540,6 +541,20 @@ select:focus-visible,
   margin: 12px 0 8px;
 }
 .btn-give-gift:hover { background: #5b21b6; }
+
+/* «Табели»: заметная кнопка загрузки PDF.
+   Раньше класс был .btn-extra (удалён в v3.1) — без фона/цвета кнопка
+   рисовалась дефолтным серым и сливалась с фоном. Делаем сплошную акцентную
+   с тенью — явный призыв к действию на (часто пустом) экране табелей. */
+.btn-upload {
+  background: var(--accent);
+  color: #fff;
+  width: 100%;
+  margin: 6px 0 20px;
+  box-shadow: 0 4px 14px rgba(29, 78, 216, 0.32);
+}
+.btn-upload:hover { background: #1e40af; }
+.btn-upload:active { transform: translateY(1px); }
 
 .balance-card {
   background: #fefce8;

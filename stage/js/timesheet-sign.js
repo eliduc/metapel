@@ -124,13 +124,15 @@ window.MetapelTimesheet = (function () {
     });
     var work = rows.filter(function (r) { return r.hours > 0; });
 
-    // нижние под-подписи (метка תאריך / חתימה / שם), строка ~ на 13pt ниже заголовков блоков
-    var subY = careBlock ? careBlock.y - 14 : 150;
-    var careSig = null, careDate = null;
+    // нижние метки (שם / חתימה / תאריך) ~ на 16pt ниже заголовков блоков; САМИ
+    // линии для подписи/даты ещё на ~22pt ниже меток. Ставим подпись на ЛИНИЮ.
+    var subY = careBlock ? careBlock.y - 16 : 158;
+    var careSig = null, careDate = null, famName = null;
     items.forEach(function (it) {
       if (Math.abs(it.y - subY) > 4) return;
-      if (/^חתימה$/.test(it.s) && it.x > 250 && it.x < 360) careSig = it;
-      if (/^תאריך$/.test(it.s) && it.x > 200 && it.x < 290) careDate = it;
+      if (/^חתימה$/.test(it.s) && it.x > 250 && it.x < 360) careSig = it;       // подпись метапеля
+      if (/^תאריך$/.test(it.s) && it.x > 200 && it.x < 290) careDate = it;       // дата метапеля
+      if (/^שם$/.test(it.s) && it.x > 470) famName = it;                         // имя/подпись семьи
     });
 
     // ДВА столбца подписи = ДВА подписанта (как в образце):
@@ -142,16 +144,20 @@ window.MetapelTimesheet = (function () {
       slots.push({ kind: 'care-day', cx: careX, cy: r.y + 2, w: 46, h: 11, label: 'метапелет — день ' + r.num });
       slots.push({ kind: 'family-day', cx: weekX, cy: r.y + 2, w: 46, h: 11, label: 'Григорий — день ' + r.num });
     });
-    var csx = careSig ? careSig.x + careSig.w / 2 : 320;
-    var csy = careSig ? careSig.y + 12 : 162;
-    slots.push({ kind: 'care-bottom', cx: csx, cy: csy, w: 52, h: 16, label: 'метапелет — подтверждение внизу' });
-    var fcx = famBlock ? famBlock.x + famBlock.w / 2 : 500;
-    slots.push({ kind: 'family', cx: fcx, cy: (careBlock ? careBlock.y - 2 : 162), w: 52, h: 16, label: 'Григорий — подтверждение внизу' });
+    // линия под меткой: метка ~y158, линия ~y136 → центр подписи на ~16pt ниже метки.
+    // x центрируем по линии (она шириной ~62pt и кончается у правого края метки).
+    var csx = careSig ? (careSig.x + careSig.w - 31) : 301;
+    var csy = careSig ? (careSig.y - 16) : 142;
+    slots.push({ kind: 'care-bottom', cx: csx, cy: csy, w: 58, h: 15, label: 'метапелет — подпись внизу' });
+    var fcx = famName ? (famName.x + famName.w - 31) : (famBlock ? famBlock.x + famBlock.w / 2 : 521);
+    var fcy = famName ? (famName.y - 16) : 142;
+    slots.push({ kind: 'family', cx: fcx, cy: fcy, w: 58, h: 15, label: 'Григорий — подпись внизу' });
 
     return {
       slots: slots,
       workDays: work.map(function (r) { return r.num; }),
-      careDateAt: careDate ? { x: careDate.x - 6, y: careDate.y + 10 } : null
+      // дата печатается на линии תאריך (на ~20pt ниже метки), текст начинается левее метки
+      careDateAt: careDate ? { x: careDate.x + careDate.w - 54, y: careDate.y - 20 } : null
     };
   }
 

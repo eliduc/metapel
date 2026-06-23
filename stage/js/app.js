@@ -15,7 +15,7 @@
   // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
   // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
   var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
-  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.1.1 от 23.06.2026 (Табели: 2 подписанта, фикс PDF-буфера)';
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.2 от 23.06.2026 (Табели: цвет/контраст подписей, низ по линиям)';
 
   // ---------- «сегодня» ----------
 
@@ -53,6 +53,7 @@
   var payMethod = 'transfer';  // выбранный способ в диалоге оплаты
   var currentSign = null;      // {type:'log'|'extra', id} — чья подпись ставится
   var signCallback = null;     // если задан — окно подписи работает в режиме «вернуть PNG» (табели)
+  var signColor = null;        // цвет чернил подписи табеля (метапелет — синий, Григорий — чёрный)
   var extraKind = 'gift';      // тип в диалоге доп. платежа
   var extraMethod = 'cash';    // способ в диалоге доп. платежа
 
@@ -603,6 +604,9 @@
     return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear();
   }
 
+  // цвет чернил: метапелет (Джамшид) — синий, Григорий (семья) — чёрный
+  function tsInkColor(signer) { return signer === 'caregiver' ? '#1d4ed8' : '#000000'; }
+
   // текущий PDF для подписи: подписанный (если кто-то уже подписал), иначе исходный
   function tsFetchBase(t) {
     var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
@@ -638,7 +642,7 @@
       window.MetapelTimesheet.stamp(baseU8, parsed.slots, kinds, sig, opts).then(function (signedU8) {
         tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer); });
       }).catch(function (e) { appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
-    });
+    }, tsInkColor(signer));
   }
 
   // «По одному месту»: окно открывается на каждое место со своей надписью
@@ -659,7 +663,7 @@
       openFingerSign('✍ Подпись ' + (i + 1) + ' из ' + slots.length, 'Место: <b>' + esc(s.label) + '</b>',
         '✓ Дальше', 'Распишитесь за «' + esc(s.label) + '».', function (sig) {
           pairs.push({ slot: s, sigDataUrl: sig }); i++; next();
-        });
+        }, tsInkColor(signer));
     }
     next();
   }
@@ -1107,8 +1111,9 @@
 
   // Открывает окно подписи в режиме «вернуть PNG» (для табелей). onDone(pngDataUrl).
   // Подпись с ПРОЗРАЧНЫМ фоном — чтобы накладывалась поверх бланка.
-  function openFingerSign(title, descHtml, okText, hintText, onDone) {
+  function openFingerSign(title, descHtml, okText, hintText, onDone, color) {
     signCallback = onDone;
+    signColor = color || '#1e293b';
     currentSign = null;
     $('#sign-title').textContent = title;
     $('#sign-text').innerHTML = descHtml || '';
@@ -1116,7 +1121,33 @@
     var hint = $('#sign-hint'); if (hint) hint.textContent = hintText || 'Распишитесь пальцем в рамке выше и нажмите кнопку.';
     $('#modal-sign').classList.add('open');
     updateScrollLock();
-    setupSignCanvas(true);
+    setupSignCanvas(true, signColor);
+  }
+
+  // Обрезает подпись до рамки чернил (+поля) — чтобы в маленькой ячейке бланка
+  // подпись заполняла место и была видна, а не превращалась в точку.
+  function trimSignature(canvas) {
+    try {
+      var w = canvas.width, h = canvas.height;
+      var d = canvas.getContext('2d').getImageData(0, 0, w, h).data;
+      var minX = w, minY = h, maxX = -1, maxY = -1;
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          if (d[(y * w + x) * 4 + 3] > 16) {
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+          }
+        }
+      }
+      if (maxX < 0) return canvas.toDataURL('image/png');
+      var pad = 8;
+      minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
+      maxX = Math.min(w - 1, maxX + pad); maxY = Math.min(h - 1, maxY + pad);
+      var cw = maxX - minX + 1, ch = maxY - minY + 1;
+      var out = document.createElement('canvas'); out.width = cw; out.height = ch;
+      out.getContext('2d').drawImage(canvas, minX, minY, cw, ch, 0, 0, cw, ch);
+      return out.toDataURL('image/png');
+    } catch (e) { return canvas.toDataURL('image/png'); }
   }
 
   function openSignModal(targetType, id) {
@@ -1124,6 +1155,7 @@
     var r = signRecord(target);
     if (!r) return;
     signCallback = null;
+    signColor = null;
     currentSign = target;
     // вернуть «расписочные» подписи модалки (табели могли их поменять)
     $('#sign-title').textContent = '✍ Расписка о получении';
@@ -1142,7 +1174,7 @@
     setupSignCanvas();
   }
 
-  function setupSignCanvas(transparent) {
+  function setupSignCanvas(transparent, color) {
     var canvas = $('#sign-canvas');
     // внутреннее разрешение по фактическому размеру на экране
     var rect = canvas.getBoundingClientRect();
@@ -1154,8 +1186,8 @@
       signCtx.fillStyle = '#ffffff';
       signCtx.fillRect(0, 0, canvas.width, canvas.height);
     }
-    signCtx.strokeStyle = '#1e293b';
-    signCtx.lineWidth = 4.5;
+    signCtx.strokeStyle = color || '#1e293b';
+    signCtx.lineWidth = transparent ? 7 : 4.5; // табели — толще для контраста
     signCtx.lineCap = 'round';
     signCtx.lineJoin = 'round';
     signInk = false;
@@ -1176,7 +1208,7 @@
     if (!signInk) { appAlert('Сначала распишитесь пальцем в рамке.'); return; }
     // режим табелей: вернуть PNG в колбэк, обычную «расписочную» логику пропускаем
     if (signCallback) {
-      var data = $('#sign-canvas').toDataURL('image/png');
+      var data = trimSignature($('#sign-canvas'));
       var cb = signCallback; signCallback = null;
       closeModals();
       cb(data);
@@ -1893,8 +1925,8 @@
       canvas.addEventListener(ev, function () { signDrawing = false; });
     });
     $('#sign-ok').addEventListener('click', confirmSign);
-    // «стереть»: пере-инициализировать в нужном режиме (табель — прозрачный фон)
-    $('#sign-clear').addEventListener('click', function () { setupSignCanvas(!!signCallback); });
+    // «стереть»: пере-инициализировать в нужном режиме (табель — прозрачный фон + цвет)
+    $('#sign-clear').addEventListener('click', function () { setupSignCanvas(!!signCallback, signColor); });
     $('#sign-later').addEventListener('click', closeModals);
     // предпросмотр подписанного табеля
     $('#ts-preview-save').addEventListener('click', function () {

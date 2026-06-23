@@ -85,18 +85,35 @@
     eq('Первые карманные: первое воскресенье после 10.06', p1 && p1.id, 'pocket-2026-06-14');
     eq('Карманные: сумма', p1 && p1.amount, 100);
 
-    // ---------- страховка ----------
-    eq('Страховки за июнь нет (8.06 раньше начала работы)', find(june, 'insurance-2026-06'), null);
-    var ins = find(june, 'insurance-2026-07');
-    eq('Страховка за июль: срок', ins && ins.dueDate, '2026-07-08');
-    eq('Страховка за июль: сумма', ins && ins.amount, 300);
+    // ---------- страховка: годовой режим (по умолчанию, оплата раз в год 09.07) ----------
+    eq('Помесячной страховки за июль НЕТ (по умолчанию годовой режим)', find(june, 'insurance-2026-07'), null);
+    var insA = find(june, 'insurance-2026');
+    eq('Страховка годовая: срок = дата продления 09.07', insA && insA.dueDate, '2026-07-09');
+    eq('Страховка годовая: сумма 3300 ₪/год', insA && insA.amount, 3300);
+    var insNext = find(occs('2027-07-01'), 'insurance-2027');
+    eq('Страховка годовая: следующий год — 2027-07-09', insNext && insNext.dueDate, '2027-07-09');
+    // продление с якорной датой раньше начала работы пропускается
+    var sEarly = noBl();
+    sEarly.types.insurance.renewalDate = '2025-07-09';
+    var earlyList = occs('2026-07-01', 60, sEarly);
+    eq('Страховка годовая: продление до начала работы (2025) пропущено', find(earlyList, 'insurance-2025'), null);
+    eq('Страховка годовая: 2026 присутствует при якоре 2025', !!find(earlyList, 'insurance-2026'), true);
 
+    // ---------- страховка: помесячный режим (опция) ----------
+    var sMon = noBl();
+    sMon.types.insurance.frequency = 'monthly';
+    var juneM = occs('2026-06-12', 60, sMon);
+    eq('Помесячная: страховки за июнь нет (8.06 раньше начала работы)', find(juneM, 'insurance-2026-06'), null);
+    var insM = find(juneM, 'insurance-2026-07');
+    eq('Помесячная страховка за июль: срок', insM && insM.dueDate, '2026-07-08');
+    eq('Помесячная страховка за июль: сумма', insM && insM.amount, 300);
     // клампинг дня: 31-е число в феврале -> 28-е
     var s31 = noBl();
+    s31.types.insurance.frequency = 'monthly';
     s31.types.insurance.dayOfMonth = 31;
     var feb = occs('2027-02-20', 30, s31);
     var insFeb = find(feb, 'insurance-2027-02');
-    eq('Страховка с днём 31 в феврале 2027 -> 28.02', insFeb && insFeb.dueDate, '2027-02-28');
+    eq('Помесячная страховка с днём 31 в феврале 2027 -> 28.02', insFeb && insFeb.dueDate, '2027-02-28');
 
     // ---------- Битуах Леуми ----------
     var bJun = find(june, 'bituach-2026-06');

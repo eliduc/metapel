@@ -172,7 +172,12 @@ window.MetapelCalc = (function () {
         },
         insurance: {
           enabled: true, label: 'Мед. страховка',
-          amount: 300, dayOfMonth: 8, noticeDays: 3,
+          // Страховку Григорий платит САМ и РАЗ В ГОД (вперёд): полис продлевается
+          // 09.07 каждый год. frequency='annual' → одна выплата в год на renewalDate.
+          // Поля amount/dayOfMonth остаются для помесячного режима (frequency='monthly').
+          frequency: 'annual',
+          amountAnnual: 3300, renewalDate: '2026-07-09',
+          amount: 300, dayOfMonth: 8, noticeDays: 14,
           defaultMethod: 'transfer'
         },
         bituach: {
@@ -247,6 +252,18 @@ window.MetapelCalc = (function () {
       var h = settings.bl.hoursPerWeek;
       if (typeof h !== 'number' || isNaN(h) || h < 0) h = 0;
       settings.bl.hoursPerWeek = Math.min(BL_MAX_HOURS, h);
+    }
+    // миграция: старые настройки хранили помесячную страховку без frequency.
+    // Григорий платит её РАЗ В ГОД — переводим в годовой режим (значения из
+    // дефолтов: 3300 ₪/год, продление 09.07), не трогая, если уже задано.
+    if (settings && settings.types && settings.types.insurance) {
+      var ins = settings.types.insurance;
+      if (ins.frequency == null) {
+        var di = defaultSettings().types.insurance;
+        ins.frequency = di.frequency;
+        if (ins.amountAnnual == null) ins.amountAnnual = di.amountAnnual;
+        if (ins.renewalDate == null) ins.renewalDate = di.renewalDate;
+      }
     }
     return settings;
   }
@@ -364,6 +381,7 @@ window.MetapelCalc = (function () {
   }
 
   function genInsurance(t, start, end, out) {
+    if (t.frequency === 'annual') { genInsuranceAnnual(t, start, end, out); return; }
     var sd = parseISO(start);
     var y = sd.getFullYear(), m = sd.getMonth() + 1;
     while (true) {
@@ -382,6 +400,29 @@ window.MetapelCalc = (function () {
       }
       m++;
       if (m > 12) { m = 1; y++; }
+    }
+  }
+
+  // Годовой режим страховки: одна выплата в год на дату продления renewalDate
+  // (например 09.07). Полис оплачивается вперёд одной суммой; отмечается «оплачено»
+  // один раз и не напоминает до следующего года.
+  function genInsuranceAnnual(t, start, end, out) {
+    var anchor = t.renewalDate;
+    if (!anchor || !/^\d{4}-\d{2}-\d{2}$/.test(anchor)) return;
+    for (var k = 0; ; k++) {
+      var due = addYears(anchor, k);
+      if (due > end) break;
+      if (due < start) continue; // продление раньше начала работы — пропускаем
+      out.push({
+        id: 'insurance-' + parseISO(due).getFullYear(),
+        type: 'insurance',
+        title: 'Мед. страховка (год с ' + fmtDate(due) + ')',
+        dueDate: due,
+        amount: t.amountAnnual,
+        breakdown: ['Годовая премия частной мед. страховки (платится РАЗ В ГОД, вперёд): ' +
+          fmtMoney(t.amountAnnual),
+          'Дата продления: ' + fmtDate(due)]
+      });
     }
   }
 

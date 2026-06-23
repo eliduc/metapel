@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '5.8 от 23.06.2026 (Табели на проде: подпись + письмо в Матав, несколько получателей)';
+  var APP_VERSION = '5.9 от 23.06.2026 (Мед. страховка — раз в год, 3300 ₪, продление 09.07)';
 
   // ---------- «сегодня» ----------
 
@@ -1498,8 +1498,12 @@
         methodField('pocket')
       ] },
       { section: 'Мед. страховка', enable: 'types.insurance.enabled', fields: [
-        { path: 'types.insurance.amount', label: 'Сумма в месяц, ₪', type: 'number' },
-        { path: 'types.insurance.dayOfMonth', label: 'День оплаты (число месяца)', type: 'number' },
+        { path: 'types.insurance.frequency', label: 'Частота оплаты', type: 'select',
+          options: [['annual', 'раз в год'], ['monthly', 'ежемесячно']] },
+        { path: 'types.insurance.amountAnnual', label: 'Сумма в год, ₪ (для годовой)', type: 'number' },
+        { path: 'types.insurance.renewalDate', label: 'Дата продления (для годовой)', type: 'date' },
+        { path: 'types.insurance.amount', label: 'Сумма в месяц, ₪ (для помесячной)', type: 'number' },
+        { path: 'types.insurance.dayOfMonth', label: 'День оплаты (для помесячной)', type: 'number' },
         { path: 'types.insurance.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
         methodField('insurance')
       ] },

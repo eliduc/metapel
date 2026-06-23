@@ -155,10 +155,13 @@ window.MetapelTimesheet = (function () {
     };
   }
 
-  // Парсит PDF (Uint8Array) первой страницы -> {slots, workDays, weekCount, careDateAt}
+  // Парсит PDF (Uint8Array) первой страницы -> {slots, workDays, careDateAt}.
+  // pdf.js МОЖЕТ забрать (detach) переданный буфер в воркер — отдаём КОПИЮ
+  // (.slice(0)), иначе исходный baseU8 «опустеет» и pdf-lib потом скажет
+  // «No PDF header found» при штамповке того же массива.
   function parse(pdfU8) {
     return ensureLibs().then(function () {
-      return window.pdfjsLib.getDocument({ data: pdfU8, isEvalSupported: false }).promise;
+      return window.pdfjsLib.getDocument({ data: pdfU8.slice(0), isEvalSupported: false }).promise;
     }).then(function (doc) {
       return doc.getPage(1);
     }).then(function (page) {
@@ -229,10 +232,12 @@ window.MetapelTimesheet = (function () {
     });
   }
 
-  // Рендерит первую страницу PDF в canvas (для предпросмотра)
+  // Рендерит первую страницу PDF в canvas (для предпросмотра).
+  // Тоже отдаём pdf.js КОПИЮ: иначе после предпросмотра те же байты «опустеют»
+  // и сохранённый подписанный PDF окажется битым.
   function render(pdfU8, canvas, scale) {
     return ensureLibs().then(function () {
-      return window.pdfjsLib.getDocument({ data: pdfU8, isEvalSupported: false }).promise;
+      return window.pdfjsLib.getDocument({ data: pdfU8.slice(0), isEvalSupported: false }).promise;
     }).then(function (doc) {
       return doc.getPage(1);
     }).then(function (page) {

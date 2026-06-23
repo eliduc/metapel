@@ -15,7 +15,7 @@
   // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
   // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
   var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
-  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.3 от 23.06.2026 (Табели: месяц из бланка)';
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.4 от 23.06.2026 (Табели: Григорий недельно, месяц MM/YYYY)';
 
   // ---------- «сегодня» ----------
 
@@ -542,7 +542,7 @@
       var card = el('div', 'card paid-card');
       var head = el('div', 'card-head');
       var left = el('div', 'card-left');
-      left.appendChild(el('div', 'card-title', '📋 Табель ' + esc(t.month)));
+      left.appendChild(el('div', 'card-title', '📋 Табель ' + esc(tsMonthSlash(t.month))));
       left.appendChild(el('div', 'card-due', 'загружен ' + C.fmtDate(t.uploadedDate)));
       head.appendChild(left);
       head.appendChild(el('div', 'ts-chip ts-' + st, TS_LABELS[st]));
@@ -607,6 +607,12 @@
   // цвет чернил: метапелет (Джамшид) — синий, Григорий (семья) — чёрный
   function tsInkColor(signer) { return signer === 'caregiver' ? '#1d4ed8' : '#000000'; }
 
+  // месяц для показа/письма в формате бланка MM/YYYY (внутри храним YYYY-MM)
+  function tsMonthSlash(ym) {
+    var p = String(ym || '').split('-');
+    return p.length === 2 ? (p[1] + '/' + p[0]) : String(ym || '');
+  }
+
   // текущий PDF для подписи: подписанный (если кто-то уже подписал), иначе исходный
   function tsFetchBase(t) {
     var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
@@ -634,9 +640,9 @@
     var title = signer === 'caregiver' ? '✍ Подпись Метапелет' : '✍ Подпись за Григория';
     var desc = signer === 'caregiver'
       ? 'Распишитесь <b>один раз</b> — подпись Джамшида встанет в каждый рабочий день (столбец метапелет) и в подтверждение внизу.'
-      : 'Распишитесь <b>один раз</b> за Григория — подпись встанет в каждый рабочий день (соседний столбец) и в нижний блок семьи.';
+      : 'Распишитесь <b>один раз</b> за Григория — недельная подпись встанет на каждую рабочую неделю (столбец חתимה שбועита) и в нижний блок семьи.';
     openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (sig) {
-      var kinds = signer === 'caregiver' ? ['care-day', 'care-bottom'] : ['family-day', 'family'];
+      var kinds = signer === 'caregiver' ? ['care-day', 'care-bottom'] : ['family-week', 'family'];
       var opts = signer === 'caregiver' ? { dateText: tsDateStr(today()), dateAt: parsed.careDateAt } : {};
       showToast('Расставляю подписи…');
       window.MetapelTimesheet.stamp(baseU8, parsed.slots, kinds, sig, opts).then(function (signedU8) {
@@ -647,7 +653,7 @@
 
   // «По одному месту»: окно открывается на каждое место со своей надписью
   function tsSignIndividual(t, baseU8, parsed, signer) {
-    var kinds = signer === 'caregiver' ? ['care-day', 'care-bottom'] : ['family-day', 'family'];
+    var kinds = signer === 'caregiver' ? ['care-day', 'care-bottom'] : ['family-week', 'family'];
     var slots = parsed.slots.filter(function (s) { return kinds.indexOf(s.kind) >= 0; });
     var pairs = [], i = 0;
     function next() {
@@ -760,7 +766,7 @@
         if (dataUri.indexOf('data:') !== 0) dataUri = 'data:application/pdf;base64,' + dataUri;
         return tsLoadEmailJS().then(function () {
           return window.emailjs.send(ej.serviceId, ej.templateId, {
-            to_email: ej.recipient, recipient: ej.recipient, month: t.month,
+            to_email: ej.recipient, recipient: ej.recipient, month: tsMonthSlash(t.month),
             filename: 'tabel-' + t.month + '-signed.pdf', content: dataUri
           }, { publicKey: ej.publicKey });
         });

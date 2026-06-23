@@ -136,13 +136,28 @@ window.MetapelTimesheet = (function () {
     });
 
     // ДВА столбца подписи = ДВА подписанта (как в образце):
-    //   חתימת המטפלת (careX)  — метапелет, в каждый рабочий день;
-    //   חתימה שבועית (weekX) — Григорий (член семьи), в каждый рабочий день.
+    //   חתימת המטפלת (careX)  — метапелет, в КАЖДЫЙ рабочий день;
+    //   חתימה שבועית (weekX) — Григорий (член семьи), ОДНА подпись на неделю.
     // Плюс нижние блоки: אישור המטפל/ת (метапелет) и בן/בת משפחה (Григорий).
     var slots = [];
     work.forEach(function (r) {
       slots.push({ kind: 'care-day', cx: careX, cy: r.y + 2, w: 46, h: 11, label: 'метапелет — день ' + r.num });
-      slots.push({ kind: 'family-day', cx: weekX, cy: r.y + 2, w: 46, h: 11, label: 'Григорий — день ' + r.num });
+    });
+    // недельные группы (новая начинается с воскресенья ראשון или с первой строки);
+    // Григорий расписывается ОДИН раз на каждую неделю, где есть рабочие дни,
+    // по центру строк этой недели в столбце חתימה שבועית.
+    var weeks = [], cur = null;
+    rows.forEach(function (r) {
+      if (cur === null || r.dow === 0) { cur = { rows: [] }; weeks.push(cur); }
+      cur.rows.push(r);
+    });
+    var wk = 0;
+    weeks.forEach(function (w) {
+      if (!w.rows.some(function (r) { return r.hours > 0; })) return;
+      wk++;
+      var ys = w.rows.map(function (r) { return r.y; });
+      var cy = (Math.max.apply(null, ys) + Math.min.apply(null, ys)) / 2;
+      slots.push({ kind: 'family-week', cx: weekX, cy: cy + 2, w: 46, h: 18, label: 'Григорий — неделя ' + wk });
     });
     // линия под меткой: метка ~y158, линия ~y136 → центр подписи на ~16pt ниже метки.
     // x центрируем по линии (она шириной ~62pt и кончается у правого края метки).

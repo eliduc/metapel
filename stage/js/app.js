@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '5.9 от 23.06.2026 (Мед. страховка — раз в год, 3300 ₪, продление 09.07)';
+  var APP_VERSION = '6.0 от 23.06.2026 (Сумма от Матав вводится вручную; пикадон 8.33%; виза/разрешение выкл.; страховка раз в год)';
 
   // ---------- «сегодня» ----------
 
@@ -378,25 +378,28 @@
     if (isNaN(h) || h < 0) return 0;
     return Math.min(MAX_BL_HOURS, h);
   }
+  // прямая сумма от Матав (₪/мес): ≥ 0, округление до копеек
+  function clampAmount(v) {
+    if (isNaN(v) || v < 0) return 0;
+    return C.round2(v);
+  }
 
   function blStatusCard(content) {
     var bl = settings.bl || {};
     if (bl.approved) {
-      var off = C.blMonthlyOffset(settings);
       var cardA = el('div', 'bl-card bl-approved',
-        '✅ Часы от государства утверждены: <b>' + (bl.hoursPerWeek || 0) + ' ч/нед</b>' +
-        '<div class="bl-sub">Государство оплачивает часть зарплаты (≈ ' + C.fmtMoney(off) +
-        ' в месяц). Суммы ниже — это доплата семьи.</div>');
-      var btnA = el('button', 'btn btn-light', '✎ Изменить часы');
+        '✅ <b>Матав (гмлат сиуд) оплачивает часть зарплаты</b>' +
+        '<div class="bl-sub">Государство оплачивает часть зарплаты. Суммы ниже — это доплата семьи.</div>');
+      var btnA = el('button', 'btn btn-light', '✎ Изменить сумму от Матав');
       btnA.addEventListener('click', openHoursModal);
       cardA.appendChild(btnA);
       content.appendChild(cardA);
     } else {
       var cardP = el('div', 'bl-card bl-pending',
-        '⏳ Часы от государства пока <b>не утверждены</b>' +
-        '<div class="bl-sub">Заявление на рассмотрении в Битуах Леуми. Пока решения нет, ' +
-        'зарплата платится полностью. Когда часы утвердят — отметьте здесь.</div>');
-      var btnP = el('button', 'btn btn-light', '✓ Часы утвердили — указать');
+        '⏳ Гмлат сиуд от Матав пока <b>не учитывается</b>' +
+        '<div class="bl-sub">Пока сумма от Матав не указана, зарплата считается полностью. ' +
+        'Когда Матав платит часть — укажите сумму, и доплата семьи уменьшится.</div>');
+      var btnP = el('button', 'btn btn-light', '✓ Указать сумму от Матав');
       btnP.addEventListener('click', openHoursModal);
       cardP.appendChild(btnP);
       content.appendChild(cardP);
@@ -405,7 +408,7 @@
 
   function openHoursModal() {
     var bl = settings.bl || {};
-    $('#hours-input').value = bl.hoursPerWeek || 0;
+    $('#hours-input').value = bl.matavAmount || 0;
     $('#hours-revert').style.display = bl.approved ? '' : 'none';
     updateHoursEffect();
     $('#modal-hours').classList.add('open');
@@ -413,40 +416,33 @@
   }
 
   function stepHours(delta) {
-    var v = parseInt($('#hours-input').value, 10);
+    var v = parseFloat($('#hours-input').value);
     if (isNaN(v)) v = 0;
-    v = clampHours(v + delta);
+    v = clampAmount(v + delta * 100); // шаг ±100 ₪
     $('#hours-input').value = v;
     updateHoursEffect();
   }
 
   function updateHoursEffect() {
-    var h = clampHours(parseInt($('#hours-input').value, 10));
-    var off = C.round2(h * ((settings.bl && settings.bl.hourValueMonth) || 0));
-    $('#hours-effect').textContent = 'Государство будет платить ≈ ' + C.fmtMoney(off) + ' в месяц.';
+    var amt = clampAmount(parseFloat($('#hours-input').value));
+    var net = (settings.types && settings.types.salary) ? settings.types.salary.net : amt;
+    var doplata = Math.max(0, C.round2(net - Math.min(amt, net)));
+    $('#hours-effect').textContent = 'Матав платит ≈ ' + C.fmtMoney(amt) +
+      ' в месяц → ваша доплата зарплаты ≈ ' + C.fmtMoney(doplata) + ' (плюс субботы).';
   }
 
   function saveHours() {
     if (!actionGuard()) return;
-    var raw = parseInt($('#hours-input').value, 10);
-    if (isNaN(raw) || raw < 0) { appAlert('Укажите число часов.'); return; }
-    if (raw > MAX_BL_HOURS) {
-      // защита от опечатки (например 260 вместо 26): такое число обнулило бы
-      // все выплаты — показываем максимум и просим подтвердить ещё раз
-      $('#hours-input').value = MAX_BL_HOURS;
-      updateHoursEffect();
-      appAlert('Максимум — ' + MAX_BL_HOURS + ' часов в неделю (уровень 6). ' +
-        'Поставил ' + MAX_BL_HOURS + ' — проверьте и нажмите «сохранить» ещё раз.');
-      return;
-    }
-    var h = clampHours(raw);
-    settings.bl.approved = true;
-    settings.bl.hoursPerWeek = h;
+    var raw = parseFloat($('#hours-input').value);
+    if (isNaN(raw) || raw < 0) { appAlert('Укажите сумму от Матав (₪ в месяц). 0 — если Матав не платит.'); return; }
+    var amt = clampAmount(raw);
+    settings.bl.matavAmount = amt;
+    settings.bl.approved = amt > 0; // 0 — учёт суммы от Матав выключается
     S.saveSettings(settings);
     settings = S.loadSettings();
     closeModals();
     render();
-    showToast('✓ Часы сохранены');
+    showToast(amt > 0 ? '✓ Сумма от Матав сохранена' : '✓ Учёт суммы от Матав отключён');
     runSync();
   }
 
@@ -1443,15 +1439,14 @@
           options: [[100, 'обычный'], [115, 'крупный'], [125, 'очень крупный']] },
         { path: 'passwordTtlMinutes', label: 'Помнить пароль настроек, минут', type: 'number' }
       ] },
-      { section: '⏱ Часы Битуах Леуми (гмлат сиуд)', enable: 'bl.approved',
-        hint: 'Утверждение часов и их количество отмечаются на главном экране кнопкой ' +
-          '«Часы утвердили». Галочка слева — та же отметка «часы утверждены». ' +
-          'Максимум при иностранном работнике — 26 часов в неделю (уровень 6), ' +
-          'недельный час ≈ 241 ₪ в месяц (2025). Сейчас зачёт: ' +
-          C.fmtMoney(C.blMonthlyOffset(settings)) + ' в месяц.',
+      { section: '🤝 Гмлат сиуд: сколько платит Матав', enable: 'bl.approved',
+        hint: 'Матав платит работнику часть зарплаты (за счёт пособия по уходу от ' +
+          'Битуах Леуми), остальное доплачиваете вы. Укажите сумму, которую Матав ' +
+          'платит в месяц — её удобнее задавать на главном экране кнопкой «Указать ' +
+          'сумму от Матав» (меняется месяц к месяцу). Галочка слева — учитывать эту ' +
+          'сумму. Сейчас учтено: ' + C.fmtMoney(C.blMonthlyOffset(settings)) + ' в месяц.',
         fields: [
-        { path: 'bl.hoursPerWeek', label: 'Часов в неделю (когда утверждены)', type: 'number', min: 0, max: MAX_BL_HOURS },
-        { path: 'bl.hourValueMonth', label: 'Стоимость недельного часа, ₪ в месяц', type: 'number' },
+        { path: 'bl.matavAmount', label: 'Матав платит, ₪ в месяц', type: 'number', min: 0 },
         { path: 'bl.applyToSocial', label: 'Уменьшать также взносы, пикадон и хавраа', type: 'checkbox' }
       ] },
       { section: '🧮 Окончание работы (для калькулятора)',
@@ -1745,6 +1740,9 @@
       if (p1.length < 4) { appAlert('Пароль должен быть не короче 4 символов.'); return; }
       draft.passwordHash = C.hashString(p1);
     }
+    // approved привязан к сумме от Матав: галочка раздела «Гмлат сиуд» без
+    // введённой суммы не должна включать учёт (иначе занижение доплаты семьи)
+    if (draft.bl) draft.bl.approved = (typeof draft.bl.matavAmount === 'number' && draft.bl.matavAmount > 0);
     S.saveSettings(draft);
     settings = S.loadSettings();
     render();
@@ -1863,7 +1861,27 @@
     tapShieldUntil = Date.now() + 500;
   }
 
+  // одноразовая правка настроек для установок старше v6.0 (ПЕРСИСТЕНТНО):
+  // сбрасываем старое «утверждение по часам» (теперь привязано к сумме от Матав),
+  // выключаем визу (платится при выезде) и разрешение (для 85+ бесплатно), ставим
+  // компенсацию 8.33%. Маркер _v6 НЕ входит в дефолты → срабатывает один раз и не
+  // затирает последующие правки пользователя (mergeDeep сохраняет _v6 из stored).
+  function migrateV6() {
+    if (settings._v6) return;
+    settings._v6 = true;
+    settings.bl = settings.bl || {};
+    settings.bl.approved = (typeof settings.bl.matavAmount === 'number' && settings.bl.matavAmount > 0);
+    if (settings.types) {
+      if (settings.types.visa) settings.types.visa.enabled = false;
+      if (settings.types.permit) settings.types.permit.enabled = false;
+      if (settings.types.pikadon) settings.types.pikadon.severancePercent = 8.33;
+    }
+    S.saveSettings(settings);
+    settings = S.loadSettings();
+  }
+
   function init() {
+    migrateV6(); // привести старые установки к v6.0 до первого render
     // на staging — заметная плашка вверху и пометка в заголовке вкладки, чтобы
     // тестовую версию нельзя было спутать с боевой (данные у них РАЗНЫЕ)
     if (window.MetapelEnv && window.MetapelEnv.stage) {

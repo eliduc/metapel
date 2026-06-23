@@ -170,23 +170,23 @@
     </div>
   </div>
 
-  <!-- часы Битуах Леуми: отметка утверждения и количество (с главного экрана) -->
+  <!-- гмлат сиуд: сколько Матав платит работнику в месяц (с главного экрана) -->
   <div class="modal" id="modal-hours">
     <div class="modal-box">
-      <h2>⏱ Часы Битуах Леуми</h2>
-      <div class="muted">Государство выделяет часы по уходу. Когда их утвердят — укажите, сколько часов в неделю утвердили.</div>
+      <h2>🤝 Сумма от Матав (гмлат сиуд)</h2>
+      <div class="muted">Матав платит работнику часть зарплаты за счёт пособия по уходу. Укажите, сколько Матав платит в месяц — остальное доплачиваете вы. (Меняется месяц к месяцу — обновляйте по присланным цифрам.)</div>
       <div class="form-row">
-        <label for="hours-input">Часов в неделю</label>
+        <label for="hours-input">Матав платит, ₪/мес</label>
         <div class="stepper">
           <button type="button" id="hours-minus">−</button>
-          <input type="number" id="hours-input" min="0" max="26" step="1">
+          <input type="number" id="hours-input" min="0" step="100">
           <button type="button" id="hours-plus">+</button>
         </div>
       </div>
       <div class="hint" id="hours-effect"></div>
       <div class="modal-actions">
-        <button class="btn btn-pay" id="hours-save">✓ Часы утверждены — сохранить</button>
-        <button class="btn btn-light" id="hours-revert" style="display:none">Отметить: часы ещё не утверждены</button>
+        <button class="btn btn-pay" id="hours-save">✓ Сохранить сумму</button>
+        <button class="btn btn-light" id="hours-revert" style="display:none">Матав сейчас не платит — отключить учёт</button>
         <button class="btn btn-undo modal-close">Отмена</button>
       </div>
     </div>

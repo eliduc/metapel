@@ -44,10 +44,12 @@
       s.bl.approved = false;
       return s;
     }
-    // настройки с утверждёнными часами (26 ч/нед) для проверки зачёта
+    // настройки с учтённой суммой от Матав (для проверки зачёта); 6266 — то же
+    // значение, что давал прежний расчёт 26 ч × 241 ₪, чтобы суммы совпадали
     function withBl() {
       var s = defaults();
       s.bl.approved = true;
+      s.bl.matavAmount = 6266;
       return s;
     }
     function clone(s) { return JSON.parse(JSON.stringify(s)); }
@@ -157,7 +159,7 @@
     var pik = find(dec, 'pikadon-2026-12');
     eq('Первый пикадон: за декабрь 2026', pik !== null, true);
     eq('Пикадон: срок 8 января 2027', pik && pik.dueDate, '2027-01-08');
-    eq('Пикадон: сумма 6,5% + 6% от 6443,85 (418,85 + 386,63)', pik && pik.amount, 805.48);
+    eq('Пикадон: сумма 6,5% + 8,33% от 6443,85 (418,85 + 536,77)', pik && pik.amount, 955.62);
 
     // ---------- хавраа ----------
     var y2027 = occs('2027-06-01');
@@ -170,15 +172,19 @@
     eq('Хавраа за 4-й год: 7 × 418', h4 && h4.amount, 2926);
 
     // ---------- виза, тагид, разрешение ----------
-    var v = find(y2027, 'visa-2027');
-    eq('Виза: первая через год, срок', v && v.dueDate, '2027-06-10');
-    eq('Виза: сумма', v && v.amount, 205);
+    // виза и разрешение ВЫКЛЮЧЕНЫ по умолчанию (виза — только при выезде работника;
+    // разрешение для подопечного 85+ продлевается бесплатно)
+    eq('Виза выключена по умолчанию (нет visa-2027)', find(y2027, 'visa-2027'), null);
+    eq('Разрешение выключено по умолчанию (нет permit-2030)', find(occs('2030-06-01'), 'permit-2030'), null);
     var tg = find(y2027, 'tagid-2027');
     eq('Тагид: сумма', tg && tg.amount, 840);
-    eq('Разрешения в 2027 нет (раз в 4 года)', find(y2027, 'permit-2027'), null);
-    var pm = find(occs('2030-06-01'), 'permit-2030');
-    eq('Разрешение: первое в 2030, срок', pm && pm.dueDate, '2030-06-10');
-    eq('Разрешение: сумма', pm && pm.amount, 370);
+    // при ручном включении генерируются (виза и разрешение — ежегодно)
+    var sVisa = noBl(); sVisa.types.visa.enabled = true;
+    var vOn = find(occs('2027-06-01', 60, sVisa), 'visa-2027');
+    eq('Виза при включении: срок|сумма', vOn && (vOn.dueDate + '|' + vOn.amount), '2027-06-10|205');
+    var sPermit = noBl(); sPermit.types.permit.enabled = true;
+    var pmOn = find(occs('2027-06-01', 60, sPermit), 'permit-2027');
+    eq('Разрешение при включении: ежегодно (есть permit-2027)', pmOn && pmOn.dueDate, '2027-06-10');
 
     // ---------- статусы ----------
     var st = defaults();
@@ -194,58 +200,61 @@
     eq('Статус с отметкой об оплате = paid',
       C.getStatus(oPaid, { 'salary-2026-06': { paidDate: '2026-07-08' } }, '2026-07-09', st), 'paid');
 
-    // ---------- часы Битуах Леуми (гмлат сиуд) ----------
-    eq('Часы по умолчанию НЕ утверждены', defaults().bl.approved, false);
-    eq('Зачёт БЛ без утверждения = 0', C.blMonthlyOffset(defaults()), 0);
-    eq('Зачёт БЛ при утверждении: 26 ч × 241 ₪', C.blMonthlyOffset(withBl()), 6266);
-    // пока часы не утверждены — суммы полные
+    // ---------- зачёт по сумме от Матав (гмлат сиуд) ----------
+    eq('Учёт по умолчанию ВЫКЛ', defaults().bl.approved, false);
+    eq('Зачёт без суммы от Матав = 0', C.blMonthlyOffset(defaults()), 0);
+    eq('Зачёт = сумма от Матав (6266)', C.blMonthlyOffset(withBl()), 6266);
+    // пока сумма не указана — выплаты полные
     var fullJuly = C.generateOccurrences(defaults(), '2026-08-01', 60);
-    eq('Зарплата без утверждённых часов — полная (6500 + 4×440)',
+    eq('Зарплата без суммы от Матав — полная (6500 + 4×440)',
       find(fullJuly, 'salary-2026-07').amount, 8260);
-    eq('Битуах Леуми без часов — от полной базы',
+    eq('Битуах Леуми без суммы — от полной базы',
       find(fullJuly, 'bituach-2026-07').amount, 231.98);
-    eq('Хавраа без часов — полная (5×418)',
+    eq('Хавраа без суммы — полная (5×418)',
       find(C.generateOccurrences(defaults(), '2027-06-01', 60), 'havraa-1').amount, 2090);
-    // когда часы утверждены — зачёт применяется
+    // когда сумма от Матав указана — зачёт применяется
     var blJuly = C.generateOccurrences(withBl(), '2026-08-01', 60);
     var blSal = find(blJuly, 'salary-2026-07');
-    eq('Зарплата за июль с зачётом БЛ: 6500−6266 + 4×440', blSal && blSal.amount, 1994);
+    eq('Зарплата за июль с зачётом: 6500−6266 + 4×440', blSal && blSal.amount, 1994);
     var blBit = find(blJuly, 'bituach-2026-07');
     eq('Битуах Леуми с зачётом: 3,6% × (6443,85−6266)', blBit && blBit.amount, 6.4);
     var blJune = find(C.generateOccurrences(withBl(), '2026-07-06', 60), 'salary-2026-06');
     eq('Частичный июнь с зачётом: 4550 − 4386,20 + 3×440', blJune && blJune.amount, 1483.8);
     var blPik = find(C.generateOccurrences(withBl(), '2027-01-05', 60), 'pikadon-2026-12');
-    eq('Пикадон с зачётом: 12,5% × 177,85', blPik && blPik.amount, 22.23);
+    eq('Пикадон с зачётом: 14,83% × 177,85 (6,5%+8,33%)', blPik && blPik.amount, 26.37);
     var blHav = find(C.generateOccurrences(withBl(), '2027-06-01', 60), 'havraa-1');
     eq('Хавраа — доля семьи 3,6%: 2090 × 0,036', blHav && blHav.amount, 75.24);
     var blNoSoc = withBl();
     blNoSoc.bl.applyToSocial = false;
     var noSocList = C.generateOccurrences(blNoSoc, '2026-08-01', 60);
-    eq('Без applyToSocial взносы считаются от полной базы',
+    eq('Без applyToSocial взносы от полной базы',
       find(noSocList, 'bituach-2026-07').amount, 231.98);
     eq('Зарплата при этом всё равно с зачётом',
       find(noSocList, 'salary-2026-07').amount, 1994);
-    // другое число утверждённых часов даёт другой зачёт
-    var bl22 = withBl(); bl22.bl.hoursPerWeek = 22;
-    eq('22 утверждённых часа: 22 × 241', C.blMonthlyOffset(bl22), 5302);
-    // при максимуме 26 ч зачёт (6266) меньше нетто (6500) — семья всё ещё доплачивает
-    eq('26 ч: зачёт меньше нетто, доплата семьи положительна',
-      find(C.generateOccurrences(withBl(), '2026-08-01', 60), 'salary-2026-07').amount > 1760, true);
-    // санитизация: завышенные часы из бэкапа/старых настроек приводятся к 26
-    var dirty = withBl(); dirty.bl.hoursPerWeek = 260;
-    eq('sanitizeSettings: 260 ч → 26', C.sanitizeSettings(dirty).bl.hoursPerWeek, 26);
-    var dirtyNeg = withBl(); dirtyNeg.bl.hoursPerWeek = -5;
-    eq('sanitizeSettings: -5 ч → 0', C.sanitizeSettings(dirtyNeg).bl.hoursPerWeek, 0);
-    // кап зачёта по нетто-зарплате (не по grossBase): абсурдная ставка не обнуляет зарплату
-    var crazy = withBl(); crazy.bl.hourValueMonth = 2410; // опечатка вместо 241
-    eq('Кап зачёта: не больше нетто 6500', C.blMonthlyOffset(crazy), 6500);
-    eq('При абсурдной ставке зарплата НЕ обнуляется (остаётся шабат)',
-      find(C.generateOccurrences(crazy, '2026-08-01', 60), 'salary-2026-07').amount > 0, true);
-    // легитимная ставка чуть выше порога старого (grossBase) капа НЕ занижает зачёт
-    var hiRate = withBl(); hiRate.bl.hourValueMonth = 250; // 26×250=6500 ≤ net
-    eq('Ставка 250: зачёт 6500 (не урезан до grossBase)', C.blMonthlyOffset(hiRate), 6500);
-    var midRate = withBl(); midRate.bl.hourValueMonth = 248; // 26×248=6448, между grossBase и net
-    eq('Ставка 248: зачёт 6448 не урезан до grossBase', C.blMonthlyOffset(midRate), 6448);
+    // прямая сумма от Матав 2000
+    var sMatav = defaults(); sMatav.bl.approved = true; sMatav.bl.matavAmount = 2000;
+    eq('Зачёт = сумма от Матав 2000', C.blMonthlyOffset(sMatav), 2000);
+    var matSal = find(C.generateOccurrences(sMatav, '2026-08-01', 60), 'salary-2026-07');
+    eq('Зарплата с суммой 2000: 6500−2000 + 4×440', matSal && matSal.amount, 6260);
+    eq('Разбивка зарплаты упоминает «Матав»',
+      matSal.breakdown.join('|').indexOf('Матав') >= 0, true);
+    var matBit = find(C.generateOccurrences(sMatav, '2026-08-01', 60), 'bituach-2026-07');
+    eq('Битуах с суммой 2000: 3,6%×(6443,85−2000)', matBit && matBit.amount, 159.98);
+    // КРИТИЧНО: approved=true БЕЗ суммы (matavAmount=0) → зачёта НЕТ (нет недоплаты,
+    // нет отката на устаревший расчёт «часы × ставка»)
+    var appNoAmt = defaults(); appNoAmt.bl.approved = true; appNoAmt.bl.matavAmount = 0;
+    eq('approved без суммы → зачёт 0 (нет недоплаты)', C.blMonthlyOffset(appNoAmt), 0);
+    eq('approved без суммы → зарплата полная',
+      find(C.generateOccurrences(appNoAmt, '2026-08-01', 60), 'salary-2026-07').amount, 8260);
+    eq('sanitize: approved=true без суммы → approved=false',
+      C.sanitizeSettings(appNoAmt).bl.approved, false);
+    eq('sanitize: отрицательная сумма → 0',
+      C.sanitizeSettings((function () { var s = withBl(); s.bl.matavAmount = -5; return s; })()).bl.matavAmount, 0);
+    // кап зачёта по нетто-зарплате: сумма больше нетто не уводит доплату в минус
+    var bigMatav = defaults(); bigMatav.bl.approved = true; bigMatav.bl.matavAmount = 7000;
+    eq('Сумма 7000 > нетто 6500 → зачёт капится нетто 6500', C.blMonthlyOffset(bigMatav), 6500);
+    eq('При зачёте ≥ нетто зарплата НЕ обнуляется (остаётся шабат)',
+      find(C.generateOccurrences(bigMatav, '2026-08-01', 60), 'salary-2026-07').amount > 0, true);
     // нетто-зарплата НИЖЕ зачёта: соцзачёт НЕ урезается по net (взносы от настоящего зачёта)
     var lowNet = withBl(); lowNet.types.salary.net = 5000; // < зачёт 6266
     var lowList = C.generateOccurrences(lowNet, '2026-08-01', 60);
@@ -254,32 +263,32 @@
     eq('net 5000: зарплатный зачёт капится net → доплата = только шабат (4×440)',
       find(lowList, 'salary-2026-07').amount, 1760);
     var lowPik = find(C.generateOccurrences(lowNet, '2027-01-05', 60), 'pikadon-2026-12');
-    eq('net 5000: пикадон от настоящего зачёта = 22,23 (не завышен)', lowPik && lowPik.amount, 22.23);
-    // разбивка: при net ниже зачёта строка «часы × ставка» остаётся верным равенством
+    eq('net 5000: пикадон от настоящего зачёта = 26,37 (не завышен)', lowPik && lowPik.amount, 26.37);
+    // разбивка: при net ниже зачёта строка зачёта остаётся верным равенством
     var lowSal = find(lowList, 'salary-2026-07');
     eq('Разбивка net 5000: есть пометка «в пределах нетто-зарплаты»',
       lowSal.breakdown.join('|').indexOf('в пределах нетто') >= 0, true);
     var defSal = find(C.generateOccurrences(withBl(), '2026-08-01', 60), 'salary-2026-07');
     eq('Разбивка net 6500: прямое вычитание без пометки',
       defSal.breakdown.join('|').indexOf('в пределах нетто') >= 0, false);
-    // частичный первый месяц: пропорция стоит в равенстве БЛ-строки, без «(пропорц.)»
+    // частичный первый месяц: пропорция стоит в равенстве строки «Матав»
     var juneBd = find(C.generateOccurrences(withBl(), '2026-07-06', 60), 'salary-2026-06').breakdown;
-    var blLine = juneBd.filter(function (s) { return s.indexOf('Часы Битуах') >= 0; })[0] || '';
-    eq('Разбивка частичного месяца: пропорция 21/30 в равенстве БЛ-строки',
+    var blLine = juneBd.filter(function (s) { return s.indexOf('Матав') >= 0; })[0] || '';
+    eq('Разбивка частичного месяца: пропорция 21/30 в строке «Матав»',
       blLine.indexOf('21/30') >= 0 && blLine.indexOf('пропорц') < 0, true);
 
     // ---------- калькулятор окончания работы ----------
     eq('monthsBetween: ровно 18 месяцев', C.monthsBetween('2026-06-10', '2027-12-10'), 18);
     var fin = C.calcFinalSettlement(noBl(), '2027-12-10', 'employer', 0);
     eq('Финал: зарплата за 10 дней декабря + 1 суббота', fin.breakdown[0].amount, 2536.77);
-    eq('Финал: доплата до полного пособия (8,33%×18 мес − 6%×12 мес)', fin.breakdown[1].amount, 5022.34);
+    eq('Финал: доплата до полного пособия (8,33%×18 мес − 8,33%×12 мес = за первые 6 мес)', fin.breakdown[1].amount, 3220.64);
     eq('Финал: отпуск 21 день × 258', fin.breakdown[2].amount, 5418);
     eq('Финал: хавраа за полгода 2-го года (6×418×50%)', fin.breakdown[3].amount, 1254);
-    eq('Финал: пикадон за 10/31 последнего месяца', fin.breakdown[4].amount, 259.83);
-    eq('Финал: итого при увольнении работодателем', fin.total, 14490.94);
+    eq('Финал: пикадон за 10/31 последнего месяца (14,83%)', fin.breakdown[4].amount, 308.27);
+    eq('Финал: итого при увольнении работодателем', fin.total, 12737.68);
     var finW = C.calcFinalSettlement(noBl(), '2027-12-10', 'worker', 0);
     eq('Финал: при уходе по собственному желанию доплаты нет', finW.breakdown[1].amount, 0);
-    eq('Финал: итого при уходе по собственному желанию', finW.total, 9468.6);
+    eq('Финал: итого при уходе по собственному желанию', finW.total, 9517.04);
     var finEarly = C.calcFinalSettlement(noBl(), '2026-12-09', 'employer', 0);
     eq('Финал: стаж меньше года — есть предупреждение',
       finEarly.warnings.join(' ').indexOf('меньше года') >= 0, true);

@@ -15,7 +15,7 @@
   // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
   // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
   var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
-  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.7 от 23.06.2026 (Табели: заметная кнопка загрузки + тело письма из кода)';
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.8 от 23.06.2026 (Табели: несколько получателей + повторная отправка)';
 
   // ---------- «сегодня» ----------
 
@@ -566,6 +566,7 @@
       }
       if (st === 'sent') {
         acts.appendChild(el('div', 'card-due', 'отослано ' + C.fmtDate(t.sentDate)));
+        acts.appendChild(tsBtn('📧 Отослать повторно', 'btn-pay', function () { tsSend(t.id); }));
       }
       acts.appendChild(tsBtn('🗑 Удалить табель', 'btn-undo', function () { tsDelete(t.id); }));
       card.appendChild(acts);
@@ -598,6 +599,15 @@
     var p = String(ym || '').split('-');
     return p.length === 2 ? (p[1] + '/' + p[0]) : String(ym || '');
   }
+
+  // получателей письма можно задать НЕСКОЛЬКО — через запятую ИЛИ точку с запятой.
+  // EmailJS в поле «To Email» принимает список через запятую, поэтому нормализуем
+  // оба разделителя к запятой. Возвращаем массив очищенных адресов.
+  function tsParseRecipients(raw) {
+    return String(raw || '').split(/[;,]/).map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length > 0; });
+  }
+  function tsIsEmail(a) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a); }
 
   // Подписать может каждый ОДИН раз. Подписанный PDF ВСЕГДА собирается заново из
   // ИСХОДНОГО бланка + ОБЕИХ сохранённых подписей. Поэтому второе/повторное
@@ -721,7 +731,20 @@
       return;
     }
     if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена).'); return; }
-    appConfirm('Отправить подписанный табель письмом в Матав (' + esc(ej.recipient) + ')?', '📧 Отправить', function () {
+    // получателей может быть несколько (через запятую/точку с запятой) — нормализуем
+    var toList = tsParseRecipients(ej.recipient);
+    if (!toList.length) { appAlert('Не указан e-mail получателя (Матав) в настройках.'); return; }
+    var badEmails = toList.filter(function (a) { return !tsIsEmail(a); });
+    if (badEmails.length) {
+      appAlert('Похоже, эти адреса записаны с ошибкой:\n' + badEmails.join('\n') +
+        '\n\nПроверьте список получателей в Настройках (адреса через запятую или точку с запятой).');
+      return;
+    }
+    var toStr = toList.join(', '); // EmailJS «To Email» принимает список через запятую
+    var already = !!t.sentMarked;
+    var confirmMsg = (already ? 'Отправить табель ПОВТОРНО' : 'Отправить подписанный табель') +
+      ' письмом в Матав?\n\nКому: ' + toList.join(', ');
+    appConfirm(confirmMsg, already ? '📧 Отослать повторно' : '📧 Отправить', function () {
       showToast('Готовлю и отправляю…');
       var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
       window.MetapelSync.fetchTimesheetFile(settings, id, suffix).then(function (obj) {
@@ -747,7 +770,7 @@
           '</div>';
         return tsLoadEmailJS().then(function () {
           return window.emailjs.send(ej.serviceId, ej.templateId, {
-            to_email: ej.recipient, recipient: ej.recipient, month: monthSlash,
+            to_email: toStr, recipient: toStr, month: monthSlash,
             subject: subject, message_html: messageHtml,
             filename: 'tabel-' + t.month + '-signed.pdf', content: dataUri
           }, { publicKey: ej.publicKey });
@@ -1451,12 +1474,14 @@
           'с вложениями. Ключи берутся в кабинете emailjs.com и хранятся только на ' +
           'этом устройстве. В шаблоне письма настройте динамическое вложение из ' +
           'переменных {{content}} (base64) и {{filename}}; получателя — {{recipient}}. ' +
+          'Получателей можно указать НЕСКОЛЬКО — через запятую или точку с запятой. ' +
           'Если не заполнено — табель можно скачать и отправить вручную.',
         fields: [
         { path: 'emailjs.serviceId', label: 'Service ID', type: 'text' },
         { path: 'emailjs.templateId', label: 'Template ID', type: 'text' },
         { path: 'emailjs.publicKey', label: 'Public Key', type: 'text' },
-        { path: 'emailjs.recipient', label: 'E-mail Матав (получатель)', type: 'text' }
+        { path: 'emailjs.recipient', label: 'E-mail Матав (получатель, можно несколько)', type: 'text',
+          placeholder: 'mail1@matav.co.il, mail2@matav.co.il' }
       ] },
       { section: 'Зарплата', enable: 'types.salary.enabled', fields: [
         { path: 'types.salary.net', label: 'Нетто в месяц, ₪', type: 'number' },
@@ -1589,6 +1614,7 @@
           if (f.type === 'number') input.step = 'any';
           if (f.max != null) input.max = f.max;
           if (f.min != null) input.min = f.min;
+          if (f.placeholder) input.placeholder = f.placeholder;
           input.value = getPath(settings, f.path);
         }
         input.id = fieldId;

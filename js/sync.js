@@ -285,13 +285,26 @@ window.MetapelSync = (function () {
           'Облачная копия новее этого устройства — нажмите «Восстановить» перед изменениями.');
         return false;
       }
+      // ОБЩИЙ параметр «сумма от Матав»: если облако новее (его настройки свежее),
+      // но локальные ДАННЫЕ накрывают облачные (поэтому мы заливаем) — ПРИНИМАЕМ
+      // облачную сумму ПЕРЕД заливкой. Иначе устройство со свежими данными, но
+      // устаревшей суммой затёрло бы более новую сумму в облаке (она «откатилась»
+      // бы у всех — недопустимо для денег). matavAmount синхронен по generation.
+      if (cloud && cloudGen > localGen && cloud.settings && cloud.settings.bl && settings.bl &&
+          typeof cloud.settings.bl.matavAmount === 'number') {
+        settings.bl.matavAmount = cloud.settings.bl.matavAmount;
+        settings.bl.approved = !!cloud.settings.bl.approved;
+        store.saveSettings(settings);
+      }
       var newGen = Math.max(cloudGen, localGen) + 1;
       var json = buildBackupJson(settings, store, newGen);
       // CAS по прочитанному sha: если другое устройство залило между нашим чтением
       // и записью — putFile бросит ошибку, и мы не затрём чужую запись (гонка)
       return putFile(conf(settings), dataPrefix() + 'backup/data.json', json, 'Data backup gen ' + newGen, res.sha).then(function () {
         store.setMeta('backupGeneration', newGen);
-        store.setMeta('lastBackupHash', dataHash);
+        // пересчитываем хэш по АКТУАЛЬНЫМ настройкам (могли принять облачную сумму),
+        // чтобы lastBackupHash отражал реально залитое содержимое
+        store.setMeta('lastBackupHash', hashFn(buildBackupJson(settings, store, 0)));
         store.setMeta('lastSyncError', null);
         return true;
       });
@@ -390,8 +403,10 @@ window.MetapelSync = (function () {
   }
 
   // Если в облаке более свежее поколение, а локально нет несохранённых правок —
-  // молча подтягивает облачные log/extras/returns (настройки не трогаем: токен
-  // и локальные параметры у каждого устройства свои, как и при ручном восстановлении).
+  // молча подтягивает облачные log/extras/returns/timesheets. Из НАСТРОЕК
+  // синхронизируем ТОЛЬКО «сумму от Матав» (bl.matavAmount/approved) — это общий
+  // параметр, влияющий на расчёт зарплаты на всех устройствах; токен и прочие
+  // личные настройки остаются локальными (как и при ручном восстановлении).
   // Возвращает {generation} при подтягивании, иначе null. Конфликт (локальные
   // правки + облако новее) НЕ перезаписывает — это подсветит backupIfChanged
   // обычным сообщением «Облачная копия новее — нажмите Восстановить».
@@ -417,6 +432,15 @@ window.MetapelSync = (function () {
       if (decideSync(state) !== 'pull') return null;
       // безопасно: локально несохранённого нет. replaceData заодно чистит syncQueue.
       store.replaceData({ log: cloud.log || {}, extras: cloud.extras || [], returns: cloud.returns || [], timesheets: cloud.timesheets || [] });
+      // подтянуть ОБЩУЮ «сумму от Матав» из облачных настроек (остальные настройки
+      // локальны). Мутируем settings ДО пересчёта lastBackupHash, чтобы хэш отражал
+      // новое состояние (иначе следующая синхронизация сочла бы локальное изменённым).
+      if (cloud.settings && cloud.settings.bl && settings.bl &&
+          typeof cloud.settings.bl.matavAmount === 'number') {
+        settings.bl.matavAmount = cloud.settings.bl.matavAmount;
+        settings.bl.approved = !!cloud.settings.bl.approved;
+        store.saveSettings(settings); // персистим, чтобы пережило перезагрузку
+      }
       store.setMeta('backupGeneration', state.cloudGen);
       store.setMeta('lastBackupHash', hashFn(buildBackupJson(settings, store, 0)));
       store.setMeta('lastSyncError', null);

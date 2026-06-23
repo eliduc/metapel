@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.0.4 от 23.06.2026 (Сумма от Матав вручную; пикадон 8.33%; виза/разрешение выкл.; страховка раз в год)';
+  var APP_VERSION = '6.1 от 23.06.2026 (Сумма от Матав синхронизируется между устройствами)';
 
   // ---------- «сегодня» ----------
 
@@ -1252,6 +1252,7 @@
       : Promise.resolve(null);
     pullStep.then(function (pulled) {
       if (pulled) {
+        settings = S.loadSettings(); // подтянулась и общая «сумма от Матав»
         reloadData();
         backgroundRender();
         showToast('✓ Данные обновлены с другого устройства');
@@ -1274,6 +1275,7 @@
         return window.MetapelSync.backupIfChanged(settings, S, C.hashString).then(function (backedUp) {
           syncInFlight = false;
           if (sent > 0 || backedUp) {
+            settings = S.loadSettings(); // backupIfChanged мог принять облачную «сумму от Матав»
             reloadData();
             backgroundRender();
           }

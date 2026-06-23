@@ -11,7 +11,7 @@ var CACHE_FAMILY = STAGE ? 'metapel-stage-shell-' : 'metapel-shell-';
 // Раздел «Табели» (этап 2/3) обкатывается только на stage: на проде версия
 // заморожена (v23), на stage — новее (v25). Тяжёлые pdf.js/pdf-lib/EmailJS в
 // SHELL не кладём — они грузятся лениво и кэшируются обычным fetch-обработчиком.
-var CACHE = CACHE_FAMILY + (STAGE ? 'v25' : 'v23');
+var CACHE = CACHE_FAMILY + (STAGE ? 'v26' : 'v23');
 var SHELL = [
   './',
   'index.html',

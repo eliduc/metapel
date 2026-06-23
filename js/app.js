@@ -15,7 +15,7 @@
   // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
   // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
   var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
-  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.0 от 22.06.2026 (Табели: подпись+отправка)';
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.0.1 от 23.06.2026 (Табели: подпись+отправка)';
 
   // ---------- «сегодня» ----------
 
@@ -735,11 +735,15 @@
       showToast('Готовлю и отправляю…');
       var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
       window.MetapelSync.fetchTimesheetFile(settings, id, suffix).then(function (obj) {
-        var b64 = String(obj.pdf).indexOf(',') >= 0 ? obj.pdf.split(',')[1] : obj.pdf;
+        // Динамическое вложение EmailJS («Variable Attachment») ждёт в параметре
+        // content URI — data:URL вида data:application/pdf;base64,... (а НЕ «сырой»
+        // base64). obj.pdf уже хранится в таком виде, поэтому шлём его как есть.
+        var dataUri = String(obj.pdf);
+        if (dataUri.indexOf('data:') !== 0) dataUri = 'data:application/pdf;base64,' + dataUri;
         return tsLoadEmailJS().then(function () {
           return window.emailjs.send(ej.serviceId, ej.templateId, {
             to_email: ej.recipient, recipient: ej.recipient, month: t.month,
-            filename: 'tabel-' + t.month + '-signed.pdf', content: b64
+            filename: 'tabel-' + t.month + '-signed.pdf', content: dataUri
           }, { publicKey: ej.publicKey });
         });
       }).then(function () {

@@ -15,7 +15,7 @@
   // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
   // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
   var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
-  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.0.1 от 23.06.2026 (Табели: подпись+отправка)';
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.1 от 23.06.2026 (Табели: 2 подписанта + удаление)';
 
   // ---------- «сегодня» ----------
 
@@ -550,15 +550,12 @@
       var acts = el('div', 'ts-actions');
       if (st !== 'sent') {
         if (!t.caregiverSigned) {
-          acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSign(t.id, 'caregiver', tsAllMode(card)); }));
-          var lbl = el('label', 'ts-allsign');
-          var cb = el('input'); cb.type = 'checkbox'; cb.checked = true; cb.className = 'ts-all-cb';
-          lbl.appendChild(cb);
-          lbl.appendChild(document.createTextNode(' Все подписи — расписаться один раз, поставить во все места'));
-          acts.appendChild(lbl);
+          acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSign(t.id, 'caregiver', tsAllMode(card, 'care')); }));
+          acts.appendChild(tsAllCheckbox('care'));
         }
         if (!t.familySigned) {
-          acts.appendChild(tsBtn('✍ Подпись Григория (член семьи)', 'btn-give-gift', function () { tsSign(t.id, 'family', true); }));
+          acts.appendChild(tsBtn('✍ Подпись Григория (член семьи)', 'btn-give-gift', function () { tsSign(t.id, 'family', tsAllMode(card, 'family')); }));
+          acts.appendChild(tsAllCheckbox('family'));
         }
       }
       if (t.caregiverSigned || t.familySigned) {
@@ -571,15 +568,32 @@
       if (st === 'sent') {
         acts.appendChild(el('div', 'card-due', 'отослано ' + C.fmtDate(t.sentDate)));
       }
+      acts.appendChild(tsBtn('🗑 Удалить табель', 'btn-undo', function () { tsDelete(t.id); }));
       card.appendChild(acts);
       content.appendChild(card);
     });
   }
 
-  // читает чекбокс «Все подписи» внутри карточки метапеля
-  function tsAllMode(card) {
-    var cb = card.querySelector('.ts-all-cb');
+  // чекбокс «Все подписи» (свой у метапеля и у Григория)
+  function tsAllCheckbox(who) {
+    var lbl = el('label', 'ts-allsign');
+    var cb = el('input'); cb.type = 'checkbox'; cb.checked = true; cb.className = 'ts-all-' + who;
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(' Все подписи — расписаться один раз, поставить во все места'));
+    return lbl;
+  }
+  function tsAllMode(card, who) {
+    var cb = card.querySelector('.ts-all-' + who);
     return cb ? cb.checked : true;
+  }
+  function tsDelete(id) {
+    appConfirm('Удалить эту карточку табеля? (Файлы в архиве не удаляются.)', '🗑 Удалить', function () {
+      S.deleteTimesheet(id);
+      reloadData();
+      render();
+      showToast('Табель удалён');
+      runSync();
+    });
   }
 
   // ---------- подписание табелей (Этап 2) ----------
@@ -605,7 +619,7 @@
     tsFetchBase(t).then(function (baseU8) {
       return window.MetapelTimesheet.parse(baseU8).then(function (parsed) {
         if (!parsed.slots.length) { appAlert('В бланке не нашлось мест для подписи.'); return; }
-        if (allMode || signer === 'family') tsSignAll(t, baseU8, parsed, signer);
+        if (allMode) tsSignAll(t, baseU8, parsed, signer);
         else tsSignIndividual(t, baseU8, parsed, signer);
       });
     }).catch(function (e) { appAlert('Не удалось загрузить/разобрать табель: ' + (e && e.message || e)); });
@@ -615,10 +629,10 @@
   function tsSignAll(t, baseU8, parsed, signer) {
     var title = signer === 'caregiver' ? '✍ Подпись Метапелет' : '✍ Подпись за Григория';
     var desc = signer === 'caregiver'
-      ? 'Распишитесь <b>один раз</b> — подпись Джамшида встанет во все рабочие дни, недельные ячейки и подтверждение внизу.'
-      : 'Распишитесь <b>один раз</b> за Григория (член семьи) — в нижний блок בן/בת משפחה.';
+      ? 'Распишитесь <b>один раз</b> — подпись Джамшида встанет в каждый рабочий день (столбец метапелет) и в подтверждение внизу.'
+      : 'Распишитесь <b>один раз</b> за Григория — подпись встанет в каждый рабочий день (соседний столбец) и в нижний блок семьи.';
     openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (sig) {
-      var kinds = signer === 'caregiver' ? ['care-day', 'care-week', 'care-bottom'] : ['family'];
+      var kinds = signer === 'caregiver' ? ['care-day', 'care-bottom'] : ['family-day', 'family'];
       var opts = signer === 'caregiver' ? { dateText: tsDateStr(today()), dateAt: parsed.careDateAt } : {};
       showToast('Расставляю подписи…');
       window.MetapelTimesheet.stamp(baseU8, parsed.slots, kinds, sig, opts).then(function (signedU8) {
@@ -629,7 +643,7 @@
 
   // «По одному месту»: окно открывается на каждое место со своей надписью
   function tsSignIndividual(t, baseU8, parsed, signer) {
-    var kinds = signer === 'caregiver' ? ['care-day', 'care-week', 'care-bottom'] : ['family'];
+    var kinds = signer === 'caregiver' ? ['care-day', 'care-bottom'] : ['family-day', 'family'];
     var slots = parsed.slots.filter(function (s) { return kinds.indexOf(s.kind) >= 0; });
     var pairs = [], i = 0;
     function next() {
@@ -1961,6 +1975,13 @@
       var file = e.target.files && e.target.files[0];
       e.target.value = ''; // позволить повторный выбор того же файла
       if (!file) return;
+      // PDF табеля хранится ТОЛЬКО в архиве (в localStorage он не лежит). Без токена
+      // его негде сохранить — иначе карточка появится, а подпись потом упадёт
+      // «файл не найден в архиве». Поэтому требуем настроенный архив сразу.
+      if (!window.MetapelSync.isOn(settings)) {
+        appAlert('Архив не настроен (нет токена). Введите токен GitHub в настройках, затем загрузите табель — без архива PDF негде хранить.');
+        return;
+      }
       var reader = new FileReader();
       reader.onload = function () {
         var id = 'ts-' + Date.now();
@@ -1972,14 +1993,20 @@
         S.addTimesheet(rec);
         reloadData();
         render();
-        showToast('✓ Табель загружен');
-        if (window.MetapelSync.isOn(settings)) {
-          window.MetapelSync.putTimesheetFile(settings, id, '', {
-            pdf: reader.result, fileName: file.name, month: month
-          }).then(function () { runSync(); }).catch(function (err) {
-            appAlert('Файл сохранён локально, но не залился в архив: ' + (err && err.message || err));
-          });
-        }
+        showToast('Загружаю табель в архив…');
+        window.MetapelSync.putTimesheetFile(settings, id, '', {
+          pdf: reader.result, fileName: file.name, month: month
+        }).then(function () {
+          showToast('✓ Табель загружен');
+          runSync();
+        }).catch(function (err) {
+          // PDF не попал в архив — убираем «битую» карточку, чтобы подпись потом не падала
+          S.deleteTimesheet(id);
+          reloadData();
+          render();
+          appAlert('Не удалось сохранить PDF табеля в архив: ' + (err && err.message || err) +
+            '\nКарточка удалена. Проверьте интернет/токен и загрузите снова.');
+        });
       };
       reader.readAsDataURL(file);
     });

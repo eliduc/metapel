@@ -86,7 +86,8 @@ window.MetapelTimesheet = (function () {
 
     // нижний блок подтверждения метапеля — нижняя граница строк таблицы
     var careBlock = findOne(items, /אישור המטפל/);
-    var famBlock = findOne(items, /משפחה/);
+    // именно нижний блок «בן/בת משפחה», а НЕ поле «קרוב משפחה» вверху бланка
+    var famBlock = findOne(items, /בן\/בת/);
     var bottomY = careBlock ? careBlock.y : 170;
 
     // строки-дни: правый столбец, между нижним блоком и шапкой
@@ -123,19 +124,6 @@ window.MetapelTimesheet = (function () {
     });
     var work = rows.filter(function (r) { return r.hours > 0; });
 
-    // недели: новая начинается с воскресенья (ראשון) либо с первой строки
-    var weeks = [], cur = null;
-    rows.forEach(function (r) {
-      if (cur === null || r.dow === 0) { cur = { rows: [] }; weeks.push(cur); }
-      cur.rows.push(r);
-    });
-    weeks.forEach(function (w) {
-      var ys = w.rows.map(function (r) { return r.y; });
-      w.yTop = Math.max.apply(null, ys);
-      w.yBot = Math.min.apply(null, ys);
-      w.work = w.rows.some(function (r) { return r.hours > 0; });
-    });
-
     // нижние под-подписи (метка תאריך / חתימה / שם), строка ~ на 13pt ниже заголовков блоков
     var subY = careBlock ? careBlock.y - 14 : 150;
     var careSig = null, careDate = null;
@@ -145,23 +133,24 @@ window.MetapelTimesheet = (function () {
       if (/^תאריך$/.test(it.s) && it.x > 200 && it.x < 290) careDate = it;
     });
 
+    // ДВА столбца подписи = ДВА подписанта (как в образце):
+    //   חתימת המטפלת (careX)  — метапелет, в каждый рабочий день;
+    //   חתימה שבועית (weekX) — Григорий (член семьи), в каждый рабочий день.
+    // Плюс нижние блоки: אישור המטפל/ת (метапелет) и בן/בת משפחה (Григорий).
     var slots = [];
     work.forEach(function (r) {
-      slots.push({ kind: 'care-day', cx: careX, cy: r.y + 2, w: 46, h: 11, label: 'день ' + r.num });
-    });
-    weeks.filter(function (w) { return w.work; }).forEach(function (w, i) {
-      slots.push({ kind: 'care-week', cx: weekX, cy: (w.yTop + w.yBot) / 2, w: 46, h: 20, label: 'неделя ' + (i + 1) });
+      slots.push({ kind: 'care-day', cx: careX, cy: r.y + 2, w: 46, h: 11, label: 'метапелет — день ' + r.num });
+      slots.push({ kind: 'family-day', cx: weekX, cy: r.y + 2, w: 46, h: 11, label: 'Григорий — день ' + r.num });
     });
     var csx = careSig ? careSig.x + careSig.w / 2 : 320;
     var csy = careSig ? careSig.y + 12 : 162;
-    slots.push({ kind: 'care-bottom', cx: csx, cy: csy, w: 52, h: 16, label: 'подтверждение метапеля' });
+    slots.push({ kind: 'care-bottom', cx: csx, cy: csy, w: 52, h: 16, label: 'метапелет — подтверждение внизу' });
     var fcx = famBlock ? famBlock.x + famBlock.w / 2 : 500;
-    slots.push({ kind: 'family', cx: fcx, cy: (careBlock ? careBlock.y - 2 : 162), w: 52, h: 16, label: 'подпись семьи за Григория' });
+    slots.push({ kind: 'family', cx: fcx, cy: (careBlock ? careBlock.y - 2 : 162), w: 52, h: 16, label: 'Григорий — подтверждение внизу' });
 
     return {
       slots: slots,
       workDays: work.map(function (r) { return r.num; }),
-      weekCount: weeks.filter(function (w) { return w.work; }).length,
       careDateAt: careDate ? { x: careDate.x - 6, y: careDate.y + 10 } : null
     };
   }

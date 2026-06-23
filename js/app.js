@@ -15,7 +15,7 @@
   // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
   // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
   var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
-  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.4 от 23.06.2026 (Табели: Григорий недельно, месяц MM/YYYY)';
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.5 от 23.06.2026 (Табели: без нижних подписей)';
 
   // ---------- «сегодня» ----------
 
@@ -639,11 +639,11 @@
   function tsSignAll(t, baseU8, parsed, signer) {
     var title = signer === 'caregiver' ? '✍ Подпись Метапелет' : '✍ Подпись за Григория';
     var desc = signer === 'caregiver'
-      ? 'Распишитесь <b>один раз</b> — подпись Джамшида встанет в каждый рабочий день (столбец метапелет) и в подтверждение внизу.'
-      : 'Распишитесь <b>один раз</b> за Григория — недельная подпись встанет на каждую рабочую неделю (столбец חתимה שбועита) и в нижний блок семьи.';
+      ? 'Распишитесь <b>один раз</b> — подпись Джамшида встанет в каждый рабочий день (столбец метапелет).'
+      : 'Распишитесь <b>один раз</b> за Григория — недельная подпись встанет на каждую рабочую неделю (столбец חתимה שбועита).';
     openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (sig) {
-      var kinds = signer === 'caregiver' ? ['care-day', 'care-bottom'] : ['family-week', 'family'];
-      var opts = signer === 'caregiver' ? { dateText: tsDateStr(today()), dateAt: parsed.careDateAt } : {};
+      var kinds = signer === 'caregiver' ? ['care-day'] : ['family-week'];
+      var opts = {};
       showToast('Расставляю подписи…');
       window.MetapelTimesheet.stamp(baseU8, parsed.slots, kinds, sig, opts).then(function (signedU8) {
         tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer); });
@@ -653,12 +653,12 @@
 
   // «По одному месту»: окно открывается на каждое место со своей надписью
   function tsSignIndividual(t, baseU8, parsed, signer) {
-    var kinds = signer === 'caregiver' ? ['care-day', 'care-bottom'] : ['family-week', 'family'];
+    var kinds = signer === 'caregiver' ? ['care-day'] : ['family-week'];
     var slots = parsed.slots.filter(function (s) { return kinds.indexOf(s.kind) >= 0; });
     var pairs = [], i = 0;
     function next() {
       if (i >= slots.length) {
-        var opts = signer === 'caregiver' ? { dateText: tsDateStr(today()), dateAt: parsed.careDateAt } : {};
+        var opts = {};
         showToast('Расставляю подписи…');
         window.MetapelTimesheet.stampMulti(baseU8, pairs, opts).then(function (signedU8) {
           tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer); });

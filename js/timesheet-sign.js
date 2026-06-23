@@ -159,20 +159,14 @@ window.MetapelTimesheet = (function () {
       var cy = (Math.max.apply(null, ys) + Math.min.apply(null, ys)) / 2;
       slots.push({ kind: 'family-week', cx: weekX, cy: cy + 2, w: 46, h: 18, label: 'Григорий — неделя ' + wk });
     });
-    // линия под меткой: метка ~y158, линия ~y136 → центр подписи на ~16pt ниже метки.
-    // x центрируем по линии (она шириной ~62pt и кончается у правого края метки).
-    var csx = careSig ? (careSig.x + careSig.w - 31) : 301;
-    var csy = careSig ? (careSig.y - 16) : 142;
-    slots.push({ kind: 'care-bottom', cx: csx, cy: csy, w: 58, h: 15, label: 'метапелет — подпись внизу' });
-    var fcx = famName ? (famName.x + famName.w - 31) : (famBlock ? famBlock.x + famBlock.w / 2 : 521);
-    var fcy = famName ? (famName.y - 16) : 142;
-    slots.push({ kind: 'family', cx: fcx, cy: fcy, w: 58, h: 15, label: 'Григорий — подпись внизу' });
+    // НИЖНИЕ блоки подтверждения (אишур המטפл/ת, בн/бт משפחה) и дату НЕ заполняем:
+    // Григорий расписывается сам, нижние подписи не нужны (по требованию пользователя).
+    // Поэтому слотов care-bottom/family здесь больше нет.
 
     return {
       slots: slots,
       workDays: work.map(function (r) { return r.num; }),
-      // дата печатается на линии תאריך (на ~20pt ниже метки), текст начинается левее метки
-      careDateAt: careDate ? { x: careDate.x + careDate.w - 54, y: careDate.y - 20 } : null
+      careDateAt: null
     };
   }
 

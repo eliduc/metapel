@@ -15,7 +15,7 @@
   // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
   // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
   var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
-  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.2 от 23.06.2026 (Табели: цвет/контраст подписей, низ по линиям)';
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.3 от 23.06.2026 (Табели: месяц из бланка)';
 
   // ---------- «сегодня» ----------
 
@@ -2016,29 +2016,38 @@
       }
       var reader = new FileReader();
       reader.onload = function () {
-        var id = 'ts-' + Date.now();
-        var month = C.parseISO(today()).getFullYear() + '-' +
+        var dataUrl = reader.result;
+        // месяц табеля берём ИЗ БЛАНКА (период «לתקופה MM/YYYY»), а не из даты
+        // загрузки: табель сдают за прошлый месяц. Если не распознали — текущий.
+        var fallbackMonth = C.parseISO(today()).getFullYear() + '-' +
           ('0' + (C.parseISO(today()).getMonth() + 1)).slice(-2);
-        var rec = { id: id, month: month, fileName: file.name, uploadedDate: today(),
-          caregiverSigned: false, caregiverSignedDate: null, familySigned: false,
-          familySignedDate: null, sentMarked: false, sentDate: null };
-        S.addTimesheet(rec);
-        reloadData();
-        render();
-        showToast('Загружаю табель в архив…');
-        window.MetapelSync.putTimesheetFile(settings, id, '', {
-          pdf: reader.result, fileName: file.name, month: month
-        }).then(function () {
-          showToast('✓ Табель загружен');
-          runSync();
-        }).catch(function (err) {
-          // PDF не попал в архив — убираем «битую» карточку, чтобы подпись потом не падала
-          S.deleteTimesheet(id);
-          reloadData();
-          render();
-          appAlert('Не удалось сохранить PDF табеля в архив: ' + (err && err.message || err) +
-            '\nКарточка удалена. Проверьте интернет/токен и загрузите снова.');
-        });
+        showToast('Читаю период бланка…');
+        window.MetapelTimesheet.parseMonth(window.MetapelTimesheet.u8FromDataUrl(dataUrl))
+          .catch(function () { return null; })
+          .then(function (parsedMonth) {
+            var month = parsedMonth || fallbackMonth;
+            var id = 'ts-' + Date.now();
+            var rec = { id: id, month: month, fileName: file.name, uploadedDate: today(),
+              caregiverSigned: false, caregiverSignedDate: null, familySigned: false,
+              familySignedDate: null, sentMarked: false, sentDate: null };
+            S.addTimesheet(rec);
+            reloadData();
+            render();
+            showToast('Загружаю табель в архив…');
+            window.MetapelSync.putTimesheetFile(settings, id, '', {
+              pdf: dataUrl, fileName: file.name, month: month
+            }).then(function () {
+              showToast('✓ Табель загружен (' + month + ')');
+              runSync();
+            }).catch(function (err) {
+              // PDF не попал в архив — убираем «битую» карточку, чтобы подпись потом не падала
+              S.deleteTimesheet(id);
+              reloadData();
+              render();
+              appAlert('Не удалось сохранить PDF табеля в архив: ' + (err && err.message || err) +
+                '\nКарточка удалена. Проверьте интернет/токен и загрузите снова.');
+            });
+          });
       };
       reader.readAsDataURL(file);
     });

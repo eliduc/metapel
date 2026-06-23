@@ -180,6 +180,36 @@ window.MetapelTimesheet = (function () {
     });
   }
 
+  // Достаёт ПЕРИОД табеля из шапки бланка («יומן עבודה לתקופה MM/YYYY») и
+  // возвращает 'YYYY-MM' (или null). Это правильный месяц табеля — а НЕ дата
+  // загрузки: табели сдаются за прошлый месяц, поэтому брать его надо из бланка.
+  function parseMonth(pdfU8) {
+    return ensureLibs().then(function () {
+      return window.pdfjsLib.getDocument({ data: pdfU8.slice(0), isEvalSupported: false }).promise;
+    }).then(function (doc) {
+      return doc.getPage(1);
+    }).then(function (page) {
+      return page.getTextContent();
+    }).then(function (tc) {
+      function toYM(mo, yr) { return yr + '-' + ('0' + mo).slice(-2); }
+      // 1) рядом с «לתקופה» / «יומן עבודה» — период MM/YYYY
+      for (var i = 0; i < tc.items.length; i++) {
+        var s = String(tc.items[i].str);
+        if (s.indexOf('לתקופה') >= 0 || s.indexOf('יומן עבודה') >= 0) {
+          var m = s.match(/(\d{1,2})\s*\/\s*(\d{4})/);
+          if (m) return toYM(+m[1], m[2]);
+        }
+      }
+      // 2) запасной: отдельный токен MM/YYYY (не часть DD/MM/YYYY)
+      for (var j = 0; j < tc.items.length; j++) {
+        var t = String(tc.items[j].str).trim();
+        var mm = t.match(/(?:^|[^\d\/])(\d{1,2})\/(\d{4})(?:$|[^\d\/])/);
+        if (mm && +mm[1] >= 1 && +mm[1] <= 12) return toYM(+mm[1], mm[2]);
+      }
+      return null;
+    });
+  }
+
   // Штампует подпись (sigDataUrl PNG) в слоты с kind из kinds[] на baseU8.
   // opts.dateText + parsed.careDateAt -> печатает дату у תאריך (только при care-bottom).
   // Возвращает Uint8Array подписанного PDF.
@@ -256,6 +286,7 @@ window.MetapelTimesheet = (function () {
   return {
     ensureLibs: ensureLibs,
     parse: parse,
+    parseMonth: parseMonth,
     stamp: stamp,
     stampMulti: stampMulti,
     render: render,

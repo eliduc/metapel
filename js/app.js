@@ -15,7 +15,7 @@
   // вкладка показываются на stage, а прод остаётся замороженным на 3.9.1 (вкладки нет).
   // «Повышение» на прод = снять этот гейт (показывать вкладку и версию в обеих средах).
   var TS_STAGE_ONLY = !(window.MetapelEnv && window.MetapelEnv.stage);
-  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.5 от 23.06.2026 (Табели: без нижних подписей)';
+  var APP_VERSION = TS_STAGE_ONLY ? '3.9.1 от 20.06.2026' : '5.6 от 23.06.2026 (Табели: пересборка из исходного, подпись не теряется)';
 
   // ---------- «сегодня» ----------
 
@@ -551,12 +551,10 @@
       var acts = el('div', 'ts-actions');
       if (st !== 'sent') {
         if (!t.caregiverSigned) {
-          acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSign(t.id, 'caregiver', tsAllMode(card, 'care')); }));
-          acts.appendChild(tsAllCheckbox('care'));
+          acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSign(t.id, 'caregiver'); }));
         }
         if (!t.familySigned) {
-          acts.appendChild(tsBtn('✍ Подпись Григория (член семьи)', 'btn-give-gift', function () { tsSign(t.id, 'family', tsAllMode(card, 'family')); }));
-          acts.appendChild(tsAllCheckbox('family'));
+          acts.appendChild(tsBtn('✍ Подпись Григория (член семьи)', 'btn-give-gift', function () { tsSign(t.id, 'family'); }));
         }
       }
       if (t.caregiverSigned || t.familySigned) {
@@ -575,18 +573,6 @@
     });
   }
 
-  // чекбокс «Все подписи» (свой у метапеля и у Григория)
-  function tsAllCheckbox(who) {
-    var lbl = el('label', 'ts-allsign');
-    var cb = el('input'); cb.type = 'checkbox'; cb.checked = true; cb.className = 'ts-all-' + who;
-    lbl.appendChild(cb);
-    lbl.appendChild(document.createTextNode(' Все подписи — расписаться один раз, поставить во все места'));
-    return lbl;
-  }
-  function tsAllMode(card, who) {
-    var cb = card.querySelector('.ts-all-' + who);
-    return cb ? cb.checked : true;
-  }
   function tsDelete(id) {
     appConfirm('Удалить эту карточку табеля? (Файлы в архиве не удаляются.)', '🗑 Удалить', function () {
       S.deleteTimesheet(id);
@@ -613,65 +599,43 @@
     return p.length === 2 ? (p[1] + '/' + p[0]) : String(ym || '');
   }
 
-  // текущий PDF для подписи: подписанный (если кто-то уже подписал), иначе исходный
-  function tsFetchBase(t) {
-    var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
-    return window.MetapelSync.fetchTimesheetFile(settings, t.id, suffix).then(function (obj) {
-      return window.MetapelTimesheet.u8FromDataUrl(obj.pdf);
-    });
-  }
-
-  function tsSign(id, signer, allMode) {
+  // Подписать может каждый ОДИН раз. Подписанный PDF ВСЕГДА собирается заново из
+  // ИСХОДНОГО бланка + ОБЕИХ сохранённых подписей. Поэтому второе/повторное
+  // подписание не может потерять чужую подпись (раньше копили поверх скачанного
+  // подписанного — сбой сети/кэша мог затереть подпись первого подписанта).
+  function tsSign(id, signer) {
     if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена) — подпись табеля недоступна. Введите токен в настройках.'); return; }
     var t = findTimesheet(id);
     if (!t) return;
     showToast('Загружаю бланк…');
-    tsFetchBase(t).then(function (baseU8) {
-      return window.MetapelTimesheet.parse(baseU8).then(function (parsed) {
+    window.MetapelSync.fetchTimesheetFile(settings, t.id, '').then(function (obj) {
+      var origU8 = window.MetapelTimesheet.u8FromDataUrl(obj.pdf);
+      return window.MetapelTimesheet.parse(origU8).then(function (parsed) {
         if (!parsed.slots.length) { appAlert('В бланке не нашлось мест для подписи.'); return; }
-        if (allMode) tsSignAll(t, baseU8, parsed, signer);
-        else tsSignIndividual(t, baseU8, parsed, signer);
+        var title = signer === 'caregiver' ? '✍ Подпись Метапелет' : '✍ Подпись за Григория';
+        var desc = signer === 'caregiver'
+          ? 'Распишитесь <b>один раз</b> — синяя подпись Джамшида встанет в каждый рабочий день.'
+          : 'Распишитесь <b>один раз</b> за Григория — чёрная недельная подпись встанет на каждую рабочую неделю.';
+        openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (newSig) {
+          // обе подписи: новая + уже сохранённая другого подписанта (хранится в записи)
+          var careSig = signer === 'caregiver' ? newSig : t.caregiverSig;
+          var famSig = signer === 'family' ? newSig : t.familySig;
+          showToast('Расставляю подписи…');
+          tsBuildSigned(origU8, parsed.slots, careSig, famSig).then(function (signedU8) {
+            tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer, newSig); });
+          }).catch(function (e) { appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
+        }, tsInkColor(signer));
       });
     }).catch(function (e) { appAlert('Не удалось загрузить/разобрать табель: ' + (e && e.message || e)); });
   }
 
-  // «Все подписи»: одна роспись -> во все места этого подписанта
-  function tsSignAll(t, baseU8, parsed, signer) {
-    var title = signer === 'caregiver' ? '✍ Подпись Метапелет' : '✍ Подпись за Григория';
-    var desc = signer === 'caregiver'
-      ? 'Распишитесь <b>один раз</b> — подпись Джамшида встанет в каждый рабочий день (столбец метапелет).'
-      : 'Распишитесь <b>один раз</b> за Григория — недельная подпись встанет на каждую рабочую неделю (столбец חתимה שбועита).';
-    openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (sig) {
-      var kinds = signer === 'caregiver' ? ['care-day'] : ['family-week'];
-      var opts = {};
-      showToast('Расставляю подписи…');
-      window.MetapelTimesheet.stamp(baseU8, parsed.slots, kinds, sig, opts).then(function (signedU8) {
-        tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer); });
-      }).catch(function (e) { appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
-    }, tsInkColor(signer));
-  }
-
-  // «По одному месту»: окно открывается на каждое место со своей надписью
-  function tsSignIndividual(t, baseU8, parsed, signer) {
-    var kinds = signer === 'caregiver' ? ['care-day'] : ['family-week'];
-    var slots = parsed.slots.filter(function (s) { return kinds.indexOf(s.kind) >= 0; });
-    var pairs = [], i = 0;
-    function next() {
-      if (i >= slots.length) {
-        var opts = {};
-        showToast('Расставляю подписи…');
-        window.MetapelTimesheet.stampMulti(baseU8, pairs, opts).then(function (signedU8) {
-          tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer); });
-        }).catch(function (e) { appAlert('Ошибка расстановки: ' + (e && e.message || e)); });
-        return;
-      }
-      var s = slots[i];
-      openFingerSign('✍ Подпись ' + (i + 1) + ' из ' + slots.length, 'Место: <b>' + esc(s.label) + '</b>',
-        '✓ Дальше', 'Распишитесь за «' + esc(s.label) + '».', function (sig) {
-          pairs.push({ slot: s, sigDataUrl: sig }); i++; next();
-        }, tsInkColor(signer));
-    }
-    next();
+  // собирает подписанный PDF из ИСХОДНОГО бланка: метапелет (care-day, синий) +
+  // Григорий (family-week, чёрный). Любая отсутствующая подпись просто пропускается.
+  function tsBuildSigned(origU8, slots, careSig, famSig) {
+    var p = Promise.resolve(origU8);
+    if (careSig) p = p.then(function (u8) { return window.MetapelTimesheet.stamp(u8, slots, ['care-day'], careSig, {}); });
+    if (famSig) p = p.then(function (u8) { return window.MetapelTimesheet.stamp(u8, slots, ['family-week'], famSig, {}); });
+    return p;
   }
 
   var tsPreviewSave = null;
@@ -683,13 +647,15 @@
       .catch(function (e) { appAlert('Предпросмотр не отрисовался: ' + (e && e.message || e)); });
   }
 
-  function tsSaveSigned(t, signedU8, signer) {
+  function tsSaveSigned(t, signedU8, signer, newSig) {
     var dataUrl = window.MetapelTimesheet.bytesToDataUrl(signedU8, 'application/pdf');
     showToast('Сохраняю подписанный табель…');
     window.MetapelSync.putTimesheetFile(settings, t.id, '-signed', { pdf: dataUrl, fileName: t.fileName, month: t.month }).then(function () {
+      // СОХРАНЯЕМ саму подпись (PNG) в записи — чтобы при следующем подписании
+      // другим человеком пересобрать PDF из исходного + обеих подписей.
       var patch = {};
-      if (signer === 'caregiver') { patch.caregiverSigned = true; patch.caregiverSignedDate = today(); }
-      else { patch.familySigned = true; patch.familySignedDate = today(); }
+      if (signer === 'caregiver') { patch.caregiverSigned = true; patch.caregiverSignedDate = today(); patch.caregiverSig = newSig; }
+      else { patch.familySigned = true; patch.familySignedDate = today(); patch.familySig = newSig; }
       S.updateTimesheet(t.id, patch);
       reloadData();
       render();

@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.0.1 от 23.06.2026 (Сумма от Матав вручную; пикадон 8.33%; виза/разрешение выкл.; страховка раз в год)';
+  var APP_VERSION = '6.0.2 от 23.06.2026 (Сумма от Матав вручную; пикадон 8.33%; виза/разрешение выкл.; страховка раз в год)';
 
   // ---------- «сегодня» ----------
 
@@ -396,8 +396,7 @@
       content.appendChild(cardA);
     } else {
       var cardP = el('div', 'bl-card bl-pending',
-        '⏳ Гмлат сиуд от Матав пока <b>не учитывается</b>' +
-        '<div class="bl-sub">Введите сумму оплаты от Матав (гмлат сиуд) за последний месяц.</div>');
+        'Введите сумму оплаты от Матав (гмлат сиуд) за последний месяц.');
       var btnP = el('button', 'btn btn-light', '✓ Указать сумму от Матав');
       btnP.addEventListener('click', openHoursModal);
       cardP.appendChild(btnP);

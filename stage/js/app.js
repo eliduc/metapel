@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.0.2 от 23.06.2026 (Сумма от Матав вручную; пикадон 8.33%; виза/разрешение выкл.; страховка раз в год)';
+  var APP_VERSION = '6.0.3 от 23.06.2026 (Сумма от Матав вручную; пикадон 8.33%; виза/разрешение выкл.; страховка раз в год)';
 
   // ---------- «сегодня» ----------
 
@@ -388,15 +388,15 @@
     var bl = settings.bl || {};
     if (bl.approved) {
       var cardA = el('div', 'bl-card bl-approved',
-        '✅ <b>Матав (гмлат сиуд) оплачивает часть зарплаты</b>' +
-        '<div class="bl-sub">Государство оплачивает часть зарплаты. Суммы ниже — это доплата семьи.</div>');
+        '✅ <b>Матав (гмлат сиуд) платит: ' + C.fmtMoney(bl.matavAmount || 0) + ' в месяц</b>' +
+        '<div class="bl-sub">Эта сумма вычтена из зарплаты — суммы ниже это доплата семьи. Если Матав прислал другую цифру — измените.</div>');
       var btnA = el('button', 'btn btn-light', '✎ Изменить сумму от Матав');
       btnA.addEventListener('click', openHoursModal);
       cardA.appendChild(btnA);
       content.appendChild(cardA);
     } else {
       var cardP = el('div', 'bl-card bl-pending',
-        'Введите сумму оплаты от Матав (гмлат сиуд) за последний месяц.');
+        '<div class="bl-sub">Введите сумму оплаты от Матав (гмлат сиуд) за последний месяц.</div>');
       var btnP = el('button', 'btn btn-light', '✓ Указать сумму от Матав');
       btnP.addEventListener('click', openHoursModal);
       cardP.appendChild(btnP);

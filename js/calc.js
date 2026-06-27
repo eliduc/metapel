@@ -136,19 +136,13 @@ window.MetapelCalc = (function () {
       employerFullName: 'Григорий Разумовский', // ФИО работодателя для расписок
       uiScale: 100, // размер текста, % (115 — крупный, 125 — очень крупный)
       passwordTtlMinutes: 10, // сколько минут не спрашивать пароль настроек повторно
-      // Часы по уходу от Битуах Леуми (гмлат сиуд): организация по уходу
-      // получает деньги за часы и платит метапелю свою часть зарплаты.
-      // Пока часы не утверждены (approved=false) — зачёт 0, всю зарплату
-      // платит семья. После утверждения зачёт = hoursPerWeek × hourValueMonth;
-      // максимум 26 ч/нед (уровень 6, иностранный работник), час ≈ 241 ₪/мес (2025).
+      // Гмлат сиуд от Матав: Матав платит работнику ЧАСТЬ зарплаты за счёт пособия
+      // по уходу, остальное доплачивает семья. matavAmount — эта сумма (₪/мес),
+      // вводится вручную (меняется месяц к месяцу). approved=false / сумма 0 →
+      // зачёта нет, всю зарплату платит семья.
       bl: {
         approved: false,    // Матав платит часть (отмечается на главном экране)
-        // matavAmount — сколько Матав (гмлат сиуд) фактически платит работнику в
-        // месяц, ₪. ПРЯМОЙ ввод; меняется месяц к месяцу — пользователь обновляет.
-        // Если matavAmount>0 — берётся он; иначе старый расчёт «часы × ставка».
-        matavAmount: 0,
-        hoursPerWeek: 26,   // legacy: запасной расчёт зачёта, если сумма не задана
-        hourValueMonth: 241,
+        matavAmount: 0,     // сколько Матав платит работнику в месяц, ₪ (прямой ввод)
         applyToSocial: true // уменьшать также взносы, пикадон и хавраа
       },
       // параметры калькулятора окончания работы (раздел 6 памятки)
@@ -236,11 +230,7 @@ window.MetapelCalc = (function () {
     };
   }
 
-  // ---------- зачёт часов Битуах Леуми ----------
-
-  // сумма, которую покрывает организация по уходу за счёт часов БЛ, ₪/мес
-  // законный максимум часов по уходу (уровень 6, иностранный работник)
-  var BL_MAX_HOURS = 26;
+  // ---------- зачёт суммы от Матав (гмлат сиуд) ----------
 
   // сколько Матав (гмлат сиуд) покрывает в месяц, ₪ (брутто, без потолков):
   // ПРЯМАЯ сумма matavAmount, если задана (>0); иначе legacy «часы × ставка».
@@ -268,17 +258,11 @@ window.MetapelCalc = (function () {
     return Math.min(off, net);
   }
 
-  // нормализация настроек при загрузке/восстановлении: часы из любого
-  // источника (бэкап, старый localStorage, ручной ввод) приводим к 0..26
+  // нормализация настроек при загрузке/восстановлении (mergeDeep уже заполнил
+  // недостающие поля из дефолтов; одноразовая правка старых полей — в app.js migrateV6)
   function sanitizeSettings(settings) {
     if (settings && settings.bl) {
-      var h = settings.bl.hoursPerWeek;
-      if (typeof h !== 'number' || isNaN(h) || h < 0) h = 0;
-      settings.bl.hoursPerWeek = Math.min(BL_MAX_HOURS, h);
-      // сумма от Матав ≥ 0 (защита от мусора в бэкапе/старых настройках).
-      // Одноразовая правка старых полей (сброс утверждения, виза/разрешение,
-      // ставка компенсации) делается персистентно в app.js (migrateV6), т.к.
-      // sanitizeSettings не сохраняется и mergeDeep уже заполняет matavAmount.
+      // сумма от Матав ≥ 0 (защита от мусора в бэкапе/старых настройках)
       if (typeof settings.bl.matavAmount !== 'number' || isNaN(settings.bl.matavAmount) || settings.bl.matavAmount < 0) {
         settings.bl.matavAmount = 0;
       }
@@ -286,18 +270,6 @@ window.MetapelCalc = (function () {
       // рассинхрона галочки раздела настроек и от восстановления старого бэкапа,
       // где approved=true мог стоять без суммы (иначе — недоплата работнику).
       if (!(settings.bl.matavAmount > 0)) settings.bl.approved = false;
-    }
-    // миграция: старые настройки хранили помесячную страховку без frequency.
-    // Григорий платит её РАЗ В ГОД — переводим в годовой режим (значения из
-    // дефолтов: 3300 ₪/год, продление 09.07), не трогая, если уже задано.
-    if (settings && settings.types && settings.types.insurance) {
-      var ins = settings.types.insurance;
-      if (ins.frequency == null) {
-        var di = defaultSettings().types.insurance;
-        ins.frequency = di.frequency;
-        if (ins.amountAnnual == null) ins.amountAnnual = di.amountAnnual;
-        if (ins.renewalDate == null) ins.renewalDate = di.renewalDate;
-      }
     }
     return settings;
   }
@@ -369,11 +341,8 @@ window.MetapelCalc = (function () {
         // множитель пропорции выносим в само равенство (как в строке «Нетто»),
         // чтобы «X × Y [× д/Д] = Z» читалось верным равенством, а не пряталось в «(пропорц.)»
         var propFactor = workedDays === dim ? '' : (' × ' + workedDays + '/' + dim);
-        var usingMatav = (typeof blSettings.matavAmount === 'number' && blSettings.matavAmount > 0);
-        var blLead = usingMatav
-          ? ('Платит Матав (гмлат сиуд)' + propFactor)
-          : ('Часы Битуах Леуми: ' + blSettings.hoursPerWeek + ' ч/нед × ' +
-            fmtMoney(blSettings.hourValueMonth) + propFactor);
+        // зачёт всегда из суммы от Матав (offPart>0 ⟹ matavAmount>0)
+        var blLead = 'Платит Матав (гмлат сиуд)' + propFactor;
         if (rawPart - offPart > 0.01) {
           breakdown.push(blLead + ' = ' + fmtMoney(rawPart));
           breakdown.push('Зачтено в пределах нетто-зарплаты: − ' + fmtMoney(offPart) +
@@ -870,7 +839,6 @@ window.MetapelCalc = (function () {
     timesheetStatus: timesheetStatus,
     defaultSettings: defaultSettings,
     sanitizeSettings: sanitizeSettings,
-    BL_MAX_HOURS: BL_MAX_HOURS,
     blMonthlyOffset: blMonthlyOffset,
     blFamilyShare: blFamilyShare,
     monthsBetween: monthsBetween,

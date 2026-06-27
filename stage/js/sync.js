@@ -285,17 +285,11 @@ window.MetapelSync = (function () {
           'Облачная копия новее этого устройства — нажмите «Восстановить» перед изменениями.');
         return false;
       }
-      // ОБЩИЙ параметр «сумма от Матав»: если облако новее (его настройки свежее),
-      // но локальные ДАННЫЕ накрывают облачные (поэтому мы заливаем) — ПРИНИМАЕМ
-      // облачную сумму ПЕРЕД заливкой. Иначе устройство со свежими данными, но
-      // устаревшей суммой затёрло бы более новую сумму в облаке (она «откатилась»
-      // бы у всех — недопустимо для денег). matavAmount синхронен по generation.
-      if (cloud && cloudGen > localGen && cloud.settings && cloud.settings.bl && settings.bl &&
-          typeof cloud.settings.bl.matavAmount === 'number') {
-        settings.bl.matavAmount = cloud.settings.bl.matavAmount;
-        settings.bl.approved = !!cloud.settings.bl.approved;
-        store.saveSettings(settings);
-      }
+      // ОБЩИЙ параметр «сумма от Матав»: если облако новее (cloudGen>localGen), но мы
+      // заливаем (наши ДАННЫЕ накрывают облачные) — ПРИНИМАЕМ облачную сумму ПЕРЕД
+      // заливкой, иначе затёрли бы более новую сумму своей устаревшей (откат у всех).
+      applySharedSettings(settings, store,
+        sharedSettingsFromCloud(cloud && cloud.settings, cloud && (cloudGen > localGen)));
       var newGen = Math.max(cloudGen, localGen) + 1;
       var json = buildBackupJson(settings, store, newGen);
       // CAS по прочитанному sha: если другое устройство залило между нашим чтением
@@ -402,6 +396,28 @@ window.MetapelSync = (function () {
     return 'conflict';
   }
 
+  // ЧИСТАЯ: что принять из облачной «суммы от Матав», если облако СВЕЖЕЕ.
+  // cloudNewer — при pull всегда true (decideSync гарантирует cloudGen>localGen);
+  // при push поверх облака — (cloudGen>localGen). Возвращает {matavAmount, approved}
+  // к принятию, либо null (принимать нечего: облако не свежее / нет поля).
+  // Зачем: matavAmount — ОБЩИЙ параметр; устройство НЕ должно затирать более новую
+  // облачную сумму своей устаревшей (иначе сумма «откатывалась» бы у всех — деньги).
+  function sharedSettingsFromCloud(cloudSettings, cloudNewer) {
+    if (!cloudNewer) return null;
+    if (!cloudSettings || !cloudSettings.bl || typeof cloudSettings.bl.matavAmount !== 'number') return null;
+    return { matavAmount: cloudSettings.bl.matavAmount, approved: !!cloudSettings.bl.approved };
+  }
+
+  // применяет принятую общую настройку к локальным settings и персистит (мутирует
+  // settings по ссылке — вызывающий держит ту же ссылку). Возвращает true, если приняли.
+  function applySharedSettings(settings, store, shared) {
+    if (!shared || !settings.bl) return false;
+    settings.bl.matavAmount = shared.matavAmount;
+    settings.bl.approved = shared.approved;
+    store.saveSettings(settings);
+    return true;
+  }
+
   // Если в облаке более свежее поколение, а локально нет несохранённых правок —
   // молча подтягивает облачные log/extras/returns/timesheets. Из НАСТРОЕК
   // синхронизируем ТОЛЬКО «сумму от Матав» (bl.matavAmount/approved) — это общий
@@ -432,15 +448,10 @@ window.MetapelSync = (function () {
       if (decideSync(state) !== 'pull') return null;
       // безопасно: локально несохранённого нет. replaceData заодно чистит syncQueue.
       store.replaceData({ log: cloud.log || {}, extras: cloud.extras || [], returns: cloud.returns || [], timesheets: cloud.timesheets || [] });
-      // подтянуть ОБЩУЮ «сумму от Матав» из облачных настроек (остальные настройки
-      // локальны). Мутируем settings ДО пересчёта lastBackupHash, чтобы хэш отражал
-      // новое состояние (иначе следующая синхронизация сочла бы локальное изменённым).
-      if (cloud.settings && cloud.settings.bl && settings.bl &&
-          typeof cloud.settings.bl.matavAmount === 'number') {
-        settings.bl.matavAmount = cloud.settings.bl.matavAmount;
-        settings.bl.approved = !!cloud.settings.bl.approved;
-        store.saveSettings(settings); // персистим, чтобы пережило перезагрузку
-      }
+      // подтянуть ОБЩУЮ «сумму от Матав» из облака (при pull облако всегда свежее).
+      // Применяем ДО пересчёта lastBackupHash, чтобы хэш отражал новое состояние
+      // (иначе следующая синхронизация сочла бы локальное изменённым).
+      applySharedSettings(settings, store, sharedSettingsFromCloud(cloud.settings, true));
       store.setMeta('backupGeneration', state.cloudGen);
       store.setMeta('lastBackupHash', hashFn(buildBackupJson(settings, store, 0)));
       store.setMeta('lastSyncError', null);
@@ -455,6 +466,7 @@ window.MetapelSync = (function () {
     backupIfChanged: backupIfChanged,
     pullIfNewer: pullIfNewer,
     decideSync: decideSync,
+    sharedSettingsFromCloud: sharedSettingsFromCloud,
     localSupersedesCloud: localSupersedesCloud,
     fetchBackup: fetchBackup,
     fetchReceipt: fetchReceipt,

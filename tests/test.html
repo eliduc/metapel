@@ -379,6 +379,24 @@
     eq('superset: лишний локальный табель (удалён в облаке) → false',
       ls({ timesheets: [] }, {}, [], [], [{ id: 't1' }]), false);
 
+    // ---------- синхронизация общей «суммы от Матав» (sharedSettingsFromCloud) ----------
+    function shr(cloudSettings, cloudNewer) { return Sync.sharedSettingsFromCloud(cloudSettings, cloudNewer); }
+    // РЕГРЕССИЯ «отката» (v6.1): облако новее → принимаем его сумму, а НЕ оставляем
+    // свою устаревшую (иначе устройство затёрло бы новую облачную сумму → переплата)
+    eq('shared: облако новее, сумма 4600 → принять {4600, true}',
+      shr({ bl:{ matavAmount:4600, approved:true } }, true), { matavAmount:4600, approved:true });
+    // облако НЕ новее → null: своя свежая сумма НЕ откатывается к облачной
+    eq('shared: облако НЕ новее → null (своя сумма не откатывается)',
+      shr({ bl:{ matavAmount:0, approved:false } }, false), null);
+    // OFF-состояние (0) тоже распространяется между устройствами
+    eq('shared: облако новее, сумма 0 → {0, false} (выкл распространяется)',
+      shr({ bl:{ matavAmount:0, approved:false } }, true), { matavAmount:0, approved:false });
+    eq('shared: approved приводится к булеву', shr({ bl:{ matavAmount:2000, approved:1 } }, true).approved, true);
+    // старый бэкап без bl / без числа → null (не зануляем, не падаем)
+    eq('shared: облако без bl (старый бэкап) → null', shr({}, true), null);
+    eq('shared: matavAmount не число → null', shr({ bl:{ matavAmount:null } }, true), null);
+    eq('shared: cloudSettings отсутствует → null', shr(null, true), null);
+
     // ---------- табели: статус из флагов ----------
     function tss(rec) { return C.timesheetStatus(rec); }
     eq('timesheetStatus: пусто → unsigned', tss({}), 'unsigned');

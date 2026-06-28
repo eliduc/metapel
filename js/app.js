@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.3.1 от 29.06.2026 (Синхронизация: добавленный табель больше не блокирует заливку)';
+  var APP_VERSION = '6.3.2 от 29.06.2026 (Восстановить: возвращает табели и не ломает авто-синхронизацию)';
 
   // ---------- «сегодня» ----------
 
@@ -1681,19 +1681,26 @@
             data.settings = data.settings || {};
             data.settings.sync = settings.sync; // токен этого устройства сохраняем
             S.saveSettings(data.settings);
+            // ВАЖНО: восстанавливаем И табели — иначе устройство после «Восстановить»
+            // остаётся без них (они есть в бэкапе), и автоподтягивание потом считает
+            // состав расходящимся (cloud-табель отсутствует локально → conflict).
             S.replaceData({
               log: data.log || {},
               extras: data.extras || [],
-              returns: data.returns || []
+              returns: data.returns || [],
+              timesheets: data.timesheets || []
             });
             // «усыновляем» версию облака: устройство теперь актуально и может
             // дописывать бэкап, не считаясь устаревшим; чужую историю не затрёт
             S.setMeta('backupGeneration', (typeof data.generation === 'number') ? data.generation : 0);
-            // сбрасываем хэш последней заливки: иначе guard «контент не менялся»
-            // мог бы ложно заглушить первую заливку после восстановления, если
-            // данные позже вернутся к прежнему снимку этого устройства
-            S.setMeta('lastBackupHash', null);
             settings = S.loadSettings();
+            // lastBackupHash = хэш ВОССТАНОВЛЕННОГО состояния (а НЕ null). Раньше тут
+            // стоял null — и устройство навсегда уходило в conflict: decideSync требует
+            // lastHash && localHash===lastHash для авто-pull, а с null авто-pull НИКОГДА
+            // не срабатывал (новые облачные данные, напр. табель, не приезжали). Теперь
+            // localHash совпадёт с lastHash → последующие авто-подтягивания работают.
+            S.setMeta('lastBackupHash', C.hashString(window.MetapelSync.buildBackupJson(settings, S, 0)));
+            S.setMeta('lastSyncError', null); // снять «облачная копия новее» после успешного восстановления
             reloadData();
             render();
             showToast('✓ Данные восстановлены');

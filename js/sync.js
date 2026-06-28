@@ -479,6 +479,7 @@ window.MetapelSync = (function () {
     sharedSettingsFromCloud: sharedSettingsFromCloud,
     localSupersedesCloud: localSupersedesCloud,
     fetchBackup: fetchBackup,
+    buildBackupJson: buildBackupJson,
     fetchReceipt: fetchReceipt,
     putTimesheetFile: putTimesheetFile,
     fetchTimesheetFile: fetchTimesheetFile

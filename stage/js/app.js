@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.2 от 23.06.2026 (Фото подписи: расписку можно подписать загруженной картинкой)';
+  var APP_VERSION = '6.2.1 от 23.06.2026 (Расписку в истории можно свернуть/показать)';
 
   // ---------- «сегодня» ----------
 
@@ -849,7 +849,7 @@
     }
     if (hasReceipt && window.MetapelSync.isOn(settings)) {
       line += rec.synced
-        ? '<div class="sync-badge">☁ Сохранена в архиве GitHub</div>'
+        ? '<div class="sync-badge">☁ Сохранена в архиве</div>'
         : '<div class="sync-badge">⏳ Ждёт отправки в архив</div>';
     }
     return line;
@@ -925,11 +925,23 @@
     head.appendChild(el('div', 'card-amount', C.fmtMoney(amount)));
     div.appendChild(head);
     if (e.signature) {
-      // подпись есть локально (это устройство расписывалось) — показываем сразу
-      var img = el('img', 'sig-img');
-      img.src = e.signature;
-      img.alt = 'Подпись метапеля';
-      div.appendChild(img);
+      // подпись есть локально — показываем по кнопке (свёрнута по умолчанию,
+      // переключатель «Показать»/«Скрыть» — как у подтянутых из архива)
+      var locWrap = el('div', 'sig-view');
+      var locImg = el('img', 'sig-img');
+      locImg.src = e.signature;
+      locImg.alt = 'Подпись метапеля';
+      locImg.style.display = 'none';
+      var locBtn = el('button', 'btn btn-light', '👁 Показать расписку');
+      var locShown = false;
+      locBtn.addEventListener('click', function () {
+        locShown = !locShown;
+        locImg.style.display = locShown ? '' : 'none';
+        locBtn.textContent = locShown ? '🙈 Скрыть расписку' : '👁 Показать расписку';
+      });
+      locWrap.appendChild(locImg);
+      locWrap.appendChild(locBtn);
+      div.appendChild(locWrap);
     } else if (e.signatureArchived && window.MetapelSync.isOn(settings)) {
       // подпись есть в архиве, но не на этом устройстве (напр. лэптоп) —
       // подгрузим картинку из архива по запросу (в общий бэкап её не кладут)

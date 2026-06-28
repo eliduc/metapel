@@ -241,11 +241,21 @@ window.MetapelSync = (function () {
       for (var n = 0; n < localReturns.length; n++) if (localReturns[n].id === cr[m].id) { ok = true; break; }
       if (!ok) return false;
     }
+    // Табели: локально может быть БОЛЬШЕ табелей, чем в облаке — это нормальное
+    // ДОБАВЛЕНИЕ табеля на этом устройстве, и его надо донести до облака. Поэтому
+    // равенства числа НЕ требуем (иначе свежезагруженный табель навсегда застревал
+    // бы: устройство не может залить табель, которого ещё нет в облаке, а из-за
+    // этого вместе с ним застревают и настройки — EmailJS и пр.). Требуем лишь,
+    // чтобы все ОБЛАЧНЫЕ табели были у нас (облачный/чужой табель не теряем).
+    // Цена компромисса: табель, удалённый на другом устройстве, на отставшем
+    // устройстве может «воскреснуть» при заливке — для табелей это безвредно
+    // (можно удалить повторно). Для ДЕНЕГ (log/extras/returns) состав выше
+    // по-прежнему сверяется СТРОГО на равенство, чтобы не воскрешать удалённые суммы.
     var ct = (cloud && cloud.timesheets) || [];
-    if (ct.length !== (localTimesheets || []).length) return false;
+    var lt = localTimesheets || [];
     for (var p = 0; p < ct.length; p++) {
       var okt = false;
-      for (var q = 0; q < localTimesheets.length; q++) if (localTimesheets[q].id === ct[p].id) { okt = true; break; }
+      for (var q = 0; q < lt.length; q++) if (lt[q].id === ct[p].id) { okt = true; break; }
       if (!okt) return false;
     }
     return true;

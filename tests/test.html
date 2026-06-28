@@ -377,8 +377,17 @@
       ls({ timesheets: [{ id: 't1' }] }, {}, [], [], [{ id: 't1' }]), true);
     eq('superset: облачного табеля нет локально → false',
       ls({ timesheets: [{ id: 't1' }] }, {}, [], [], []), false);
-    eq('superset: лишний локальный табель (удалён в облаке) → false',
-      ls({ timesheets: [] }, {}, [], [], [{ id: 't1' }]), false);
+    // ДОБАВЛЕНИЕ табеля локально (в облаке его ещё нет) НЕ должно блокировать заливку —
+    // иначе свежезагруженный табель навсегда застревает (вместе с настройками EmailJS).
+    eq('superset: ДОБАВЛЕННЫЙ локальный табель (в облаке 0) → true (доносим в облако)',
+      ls({ timesheets: [] }, {}, [], [], [{ id: 't1' }]), true);
+    eq('superset: cloud вообще без поля timesheets + локально добавлен табель → true',
+      ls({}, {}, [], [], [{ id: 't1' }]), true);
+    eq('superset: локально все облачные табели + лишний добавленный → true',
+      ls({ timesheets: [{ id: 't1' }] }, {}, [], [], [{ id: 't1' }, { id: 't2' }]), true);
+    eq('superset: деньги совпали, но локально ДОБАВЛЕН табель → true (не блокирует пуш)',
+      ls({ log: { p1:{paidAmount:100,paidDate:'2026-06-14',signatureArchived:true} }, timesheets: [] },
+         { p1:{paidAmount:100,paidDate:'2026-06-14',signatureArchived:true} }, [], [], [{ id: 't1' }]), true);
 
     // ---------- синхронизация общей «суммы от Матав» (sharedSettingsFromCloud) ----------
     function shr(cloudSettings, cloudNewer) { return Sync.sharedSettingsFromCloud(cloudSettings, cloudNewer); }

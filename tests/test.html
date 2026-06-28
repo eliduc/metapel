@@ -300,9 +300,10 @@
       occs('2026-06-12', 60, sOff).filter(function (o) { return o.type === 'pocket'; }).length, 0);
 
     // ---------- способ оплаты по умолчанию ----------
+    // С v6.3 по умолчанию ВСЕ типы — наличные (Григорий платит из рук в руки).
     eq('Карманные по умолчанию — наличные', defaults().types.pocket.defaultMethod, 'cash');
-    eq('Зарплата по умолчанию — перевод', defaults().types.salary.defaultMethod, 'transfer');
-    eq('Пикадон по умолчанию — перевод', defaults().types.pikadon.defaultMethod, 'transfer');
+    eq('Зарплата по умолчанию — наличные', defaults().types.salary.defaultMethod, 'cash');
+    eq('Пикадон по умолчанию — наличные', defaults().types.pikadon.defaultMethod, 'cash');
 
     // ---------- ФИО и архив ----------
     eq('ФИО для расписок по умолчанию', defaults().workerFullName, 'Джамшид Эргашев');

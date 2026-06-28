@@ -136,9 +136,6 @@ window.MetapelCalc = (function () {
       employerFullName: 'Григорий Разумовский', // ФИО работодателя для расписок
       uiScale: 100, // размер текста, % (115 — крупный, 125 — очень крупный)
       passwordTtlMinutes: 10, // сколько минут не спрашивать пароль настроек повторно
-      // фото подписи метапеля (data URL): можно подставлять в расписку вместо
-      // рисования пальцем — удобно при удалённой работе с лэптопа
-      savedSignature: '',
       // Гмлат сиуд от Матав: Матав платит работнику ЧАСТЬ зарплаты за счёт пособия
       // по уходу, остальное доплачивает семья. matavAmount — эта сумма (₪/мес),
       // вводится вручную (меняется месяц к месяцу). approved=false / сумма 0 →
@@ -164,7 +161,7 @@ window.MetapelCalc = (function () {
         salary: {
           enabled: true, label: 'Зарплата',
           net: 6500, shabbatRate: 440, dayOfMonth: 8, noticeDays: 3,
-          defaultMethod: 'transfer'
+          defaultMethod: 'cash'
         },
         pocket: {
           enabled: true, label: 'Карманные (дмей кис)',
@@ -179,13 +176,13 @@ window.MetapelCalc = (function () {
           frequency: 'annual',
           amountAnnual: 3300, renewalDate: '2026-07-09',
           amount: 300, dayOfMonth: 8, noticeDays: 14,
-          defaultMethod: 'transfer'
+          defaultMethod: 'cash'
         },
         bituach: {
           enabled: true, label: 'Битуах Леуми',
           ratePercent: 3.6, grossBase: 6443.85,
           frequency: 'monthly', dayOfMonth: 8, quarterDay: 20, noticeDays: 5,
-          defaultMethod: 'transfer'
+          defaultMethod: 'cash'
         },
         pikadon: {
           enabled: true, label: 'Пикадон (пенсия + компенсация)',
@@ -194,7 +191,7 @@ window.MetapelCalc = (function () {
           // пособие» реален; безопаснее накопить сразу 8.33%. Итого 6.5%+8.33%=14.83%.
           pensionPercent: 6.5, severancePercent: 8.33, grossBase: 6443.85,
           fromMonth: 7, dayOfMonth: 8, noticeDays: 5,
-          defaultMethod: 'transfer'
+          defaultMethod: 'cash'
         },
         havraa: {
           enabled: true, label: 'Дмей хавраа',
@@ -206,7 +203,7 @@ window.MetapelCalc = (function () {
             { from: 11, to: 99, days: 7 }
           ],
           noticeDays: 14,
-          defaultMethod: 'transfer'
+          defaultMethod: 'cash'
         },
         visa: {
           // «Интер-виза» 205 ₪ — сбор ТОЛЬКО при выезде/въезде работника (поездка
@@ -214,12 +211,12 @@ window.MetapelCalc = (function () {
           // включить вручную, когда работник реально выезжает.
           enabled: false, label: 'Виза (интер-виза, при выезде работника)',
           amount: 205, noticeDays: 14,
-          defaultMethod: 'transfer'
+          defaultMethod: 'cash'
         },
         tagid: {
           enabled: true, label: 'Корпорация (тагид)',
           amount: 840, noticeDays: 14,
-          defaultMethod: 'transfer'
+          defaultMethod: 'cash'
         },
         permit: {
           // Разрешение работодателя (היתר) для подопечного 85+ продлевается
@@ -227,7 +224,7 @@ window.MetapelCalc = (function () {
           // (intervalYears=1 — корректная ежегодная частота, если кто-то включит.)
           enabled: false, label: 'Продление разрешения (для 85+ — бесплатно)',
           amount: 370, intervalYears: 1, noticeDays: 14,
-          defaultMethod: 'transfer'
+          defaultMethod: 'cash'
         }
       }
     };

@@ -88,9 +88,12 @@
       <div class="hint" id="sign-hint">Метапель: распишитесь пальцем в рамке выше и нажмите ОК.</div>
       <div class="modal-actions">
         <button class="btn btn-pay" id="sign-ok">✓ ОК — деньги получил</button>
+        <button class="btn btn-light" id="sign-photo">📎 Фото подписи (вместо рисования)</button>
+        <button class="btn btn-light" id="sign-saved" style="display:none">↻ Вставить сохранённую подпись</button>
         <button class="btn btn-light" id="sign-clear">Стереть и расписаться заново</button>
         <button class="btn btn-undo" id="sign-later">Позже (расписаться потом)</button>
       </div>
+      <input type="file" id="sign-file" accept="image/*" style="display:none">
     </div>
   </div>
 

@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.1.1 от 23.06.2026 (внутренняя чистка: убран мёртвый «часовой» код, тесты sync)';
+  var APP_VERSION = '6.2 от 23.06.2026 (Фото подписи: расписку можно подписать загруженной картинкой)';
 
   // ---------- «сегодня» ----------
 
@@ -1120,6 +1120,30 @@
     $('#modal-sign').classList.add('open');
     updateScrollLock();
     setupSignCanvas(true, signColor);
+    updateSavedSignBtn();
+  }
+
+  // подставить готовое ФОТО подписи (data URL) на холст вместо рисования пальцем —
+  // удобно при удалённой работе: загрузил картинку подписи Джамшида один раз, и она
+  // вписывается в расписку. confirmSign дальше читает холст как обычно.
+  function drawSignatureImage(dataUrl) {
+    if (!dataUrl) return;
+    var img = new Image();
+    img.onload = function () {
+      var canvas = $('#sign-canvas');
+      var cw = canvas.width, ch = canvas.height;
+      var scale = Math.min(cw / img.width, ch / img.height) * 0.9;
+      var w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+      signCtx.drawImage(img, Math.round((cw - w) / 2), Math.round((ch - h) / 2), w, h);
+      signInk = true; // есть «чернила» — confirmSign примет
+    };
+    img.src = dataUrl;
+  }
+
+  // кнопка «вставить сохранённую подпись» — только если фото подписи уже сохранено
+  function updateSavedSignBtn() {
+    var b = $('#sign-saved');
+    if (b) b.style.display = (settings.savedSignature) ? '' : 'none';
   }
 
   // Обрезает подпись до рамки чернил (+поля) — чтобы в маленькой ячейке бланка
@@ -1170,6 +1194,7 @@
     $('#modal-sign').classList.add('open');
     updateScrollLock();
     setupSignCanvas();
+    updateSavedSignBtn();
   }
 
   function setupSignCanvas(transparent, color) {
@@ -1957,6 +1982,22 @@
     // «стереть»: пере-инициализировать в нужном режиме (табель — прозрачный фон + цвет)
     $('#sign-clear').addEventListener('click', function () { setupSignCanvas(!!signCallback, signColor); });
     $('#sign-later').addEventListener('click', closeModals);
+    // фото подписи: загрузить картинку → подставить на холст + запомнить для будущих расписок
+    $('#sign-photo').addEventListener('click', function () { $('#sign-file').click(); });
+    $('#sign-saved').addEventListener('click', function () { drawSignatureImage(settings.savedSignature); });
+    $('#sign-file').addEventListener('change', function (e) {
+      var f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        drawSignatureImage(reader.result);
+        settings.savedSignature = reader.result; // запомнить, чтобы не загружать каждый раз
+        S.saveSettings(settings);
+        updateSavedSignBtn();
+      };
+      reader.readAsDataURL(f);
+    });
     // предпросмотр подписанного табеля
     $('#ts-preview-save').addEventListener('click', function () {
       if (!actionGuard()) return;

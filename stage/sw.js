@@ -11,7 +11,7 @@ var CACHE_FAMILY = STAGE ? 'metapel-stage-shell-' : 'metapel-shell-';
 // Раздел «Табели» промотирован на прод (23.06.2026): прод поднят с v23 до v24,
 // stage — v35. Тяжёлые pdf.js/pdf-lib/EmailJS в SHELL не кладём — грузятся лениво
 // и кэшируются обычным fetch-обработчиком.
-var CACHE = CACHE_FAMILY + (STAGE ? 'v48' : 'v37');
+var CACHE = CACHE_FAMILY + (STAGE ? 'v49' : 'v38');
 var SHELL = [
   './',
   'index.html',

@@ -73,9 +73,14 @@
     var june = occs('2026-06-12');
     var sJun = find(june, 'salary-2026-06');
     eq('Зарплата за июнь: срок', sJun && sJun.dueDate, '2026-07-08');
-    eq('Зарплата за июнь: сумма (6500×21/30 + 3×440 = 4550+1320)', sJun && sJun.amount, 5870);
+    // прораторуем нетто по календарным дням КРОМЕ суббот (18/26), субботы отдельно
+    eq('Зарплата за июнь: сумма (6500×18/26 + 3×440 = 4500+1320)', sJun && sJun.amount, 5820);
     eq('Зарплата за июнь: суббот посчитано', sJun && sJun.satCount, 3);
     eq('Зарплата за июнь: есть разбивка', sJun && sJun.breakdown.length >= 3, true);
+    // реальный случай Григория: сумма от Матав за июнь 840,12 вычитается ЦЕЛИКОМ
+    var sJunMatav = (function () { var s = defaults(); s.startDate = '2026-06-10'; s.bl.approved = true; s.bl.matavAmount = 840.12; return s; })();
+    eq('Зарплата за июнь − Матав 840,12 целиком: 4500−840,12 + 1320 = 4979,88',
+      find(C.generateOccurrences(sJunMatav, '2026-07-06', 60), 'salary-2026-06').amount, 4979.88);
 
     var july = occs('2026-08-01');
     var sJul = find(july, 'salary-2026-07');
@@ -219,7 +224,8 @@
     var blBit = find(blJuly, 'bituach-2026-07');
     eq('Битуах Леуми с зачётом: 3,6% × (6443,85−6266)', blBit && blBit.amount, 6.4);
     var blJune = find(C.generateOccurrences(withBl(), '2026-07-06', 60), 'salary-2026-06');
-    eq('Частичный июнь с зачётом: 4550 − 4386,20 + 3×440', blJune && blJune.amount, 1483.8);
+    // нетто 6500×18/26=4500; Матав 6266 капится по нетто-части (4500) → доплата 0; + шабат 1320
+    eq('Частичный июнь: нетто 4500 − зачёт (кап 4500) + 3×440 = 1320', blJune && blJune.amount, 1320);
     var blPik = find(C.generateOccurrences(withBl(), '2027-01-05', 60), 'pikadon-2026-12');
     eq('Пикадон с зачётом: 14,83% × 177,85 (6,5%+8,33%)', blPik && blPik.amount, 26.37);
     var blHav = find(C.generateOccurrences(withBl(), '2027-06-01', 60), 'havraa-1');
@@ -271,24 +277,29 @@
     var defSal = find(C.generateOccurrences(withBl(), '2026-08-01', 60), 'salary-2026-07');
     eq('Разбивка net 6500: прямое вычитание без пометки',
       defSal.breakdown.join('|').indexOf('в пределах нетто') >= 0, false);
-    // частичный первый месяц: пропорция стоит в равенстве строки «Матав»
+    // частичный первый месяц: нетто прораторуется по дням КРОМЕ суббот (18/26),
+    // а сумма от Матав в строке «Матав» НЕ прораторуется
     var juneBd = find(C.generateOccurrences(withBl(), '2026-07-06', 60), 'salary-2026-06').breakdown;
+    var netLine = juneBd.filter(function (s) { return s.indexOf('Нетто') >= 0; })[0] || '';
+    eq('Разбивка частичного месяца: нетто × 18/26 (кроме суббот)',
+      netLine.indexOf('18/26') >= 0 && netLine.indexOf('кроме суббот') >= 0, true);
     var blLine = juneBd.filter(function (s) { return s.indexOf('Матав') >= 0; })[0] || '';
-    eq('Разбивка частичного месяца: пропорция 21/30 в строке «Матав»',
-      blLine.indexOf('21/30') >= 0 && blLine.indexOf('пропорц') < 0, true);
+    eq('Разбивка частичного месяца: в строке «Матав» НЕТ прорации (сумма целиком)',
+      blLine.indexOf('18/26') < 0 && blLine.indexOf('21/30') < 0, true);
 
     // ---------- калькулятор окончания работы ----------
     eq('monthsBetween: ровно 18 месяцев', C.monthsBetween('2026-06-10', '2027-12-10'), 18);
     var fin = C.calcFinalSettlement(noBl(), '2027-12-10', 'employer', 0);
-    eq('Финал: зарплата за 10 дней декабря + 1 суббота', fin.breakdown[0].amount, 2536.77);
+    // нетто по дням кроме суббот: 6500 × 9/27 = 2166,67 + 1 суббота × 440 = 2606,67
+    eq('Финал: зарплата за 10 дней декабря (9 будних) + 1 суббота', fin.breakdown[0].amount, 2606.67);
     eq('Финал: доплата до полного пособия (8,33%×18 мес − 8,33%×12 мес = за первые 6 мес)', fin.breakdown[1].amount, 3220.64);
     eq('Финал: отпуск 21 день × 258', fin.breakdown[2].amount, 5418);
     eq('Финал: хавраа за полгода 2-го года (6×418×50%)', fin.breakdown[3].amount, 1254);
     eq('Финал: пикадон за 10/31 последнего месяца (14,83%)', fin.breakdown[4].amount, 308.27);
-    eq('Финал: итого при увольнении работодателем', fin.total, 12737.68);
+    eq('Финал: итого при увольнении работодателем', fin.total, 12807.58);
     var finW = C.calcFinalSettlement(noBl(), '2027-12-10', 'worker', 0);
     eq('Финал: при уходе по собственному желанию доплаты нет', finW.breakdown[1].amount, 0);
-    eq('Финал: итого при уходе по собственному желанию', finW.total, 9517.04);
+    eq('Финал: итого при уходе по собственному желанию', finW.total, 9586.94);
     var finEarly = C.calcFinalSettlement(noBl(), '2026-12-09', 'employer', 0);
     eq('Финал: стаж меньше года — есть предупреждение',
       finEarly.warnings.join(' ').indexOf('меньше года') >= 0, true);

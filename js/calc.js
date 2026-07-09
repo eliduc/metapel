@@ -314,41 +314,44 @@ window.MetapelCalc = (function () {
     return mkDate(dy, dm, clampDay(dy, dm, dayOfMonth));
   }
 
-  function genSalary(t, start, end, out, blOff, blSettings) {
+  function genSalary(t, start, end, out, blRaw) {
     eachWorkedMonth(start, end, function (y, m, fromDay) {
       var due = nextMonthDue(y, m, t.dayOfMonth);
       if (due > end) return;
       var dim = daysInMonth(y, m);
       var workedDays = dim - fromDay + 1;
-      var sats = countSaturdays(y, m, fromDay);
-      var netPart = workedDays === dim ? t.net : round2(t.net * workedDays / dim);
-      var offPart = workedDays === dim ? blOff : round2(blOff * workedDays / dim);
+      var sats = countSaturdays(y, m, fromDay);          // субботы в отработанной части месяца
+      var full = workedDays === dim;
+      // Нетто прораторуется по КАЛЕНДАРНЫМ дням БЕЗ суббот: субботы оплачиваются
+      // отдельно по shabbatRate, поэтому в пропорцию (и числитель, и знаменатель)
+      // не входят. Полный месяц — полный нетто.
+      var satsMonth = countSaturdays(y, m);              // все субботы месяца
+      var nonSatMonth = dim - satsMonth;                 // будних (несубботних) дней в месяце
+      var nonSatWorked = workedDays - sats;              // из отработанных — несубботних
+      var netPart = full ? t.net : round2(t.net * nonSatWorked / nonSatMonth);
+      // Сумма от Матав (гмлат сиуд) — ФАКТИЧЕСКАЯ выплата за месяц (вводится вручную
+      // помесячно по присланной цифре, blRaw — без потолка по net), поэтому НЕ
+      // прораторуется; в зачёт берём в пределах нетто-части, чтобы доплата семьи не
+      // ушла в минус.
+      var offPart = Math.min(blRaw, netPart);
       var familyNet = Math.max(0, round2(netPart - offPart));
       var shabbat = sats * t.shabbatRate;
       var breakdown = [];
-      if (workedDays === dim) {
+      if (full) {
         breakdown.push('Нетто за месяц: ' + fmtMoney(t.net));
       } else {
-        breakdown.push('Нетто пропорционально (с ' + fromDay + '-го числа): ' +
-          fmtMoney(t.net) + ' × ' + workedDays + '/' + dim + ' дней = ' + fmtMoney(netPart));
+        breakdown.push('Нетто пропорц. (кроме суббот, с ' + fromDay + '-го числа): ' +
+          fmtMoney(t.net) + ' × ' + nonSatWorked + '/' + nonSatMonth + ' дн. = ' + fmtMoney(netPart));
       }
       if (offPart > 0) {
-        // полный зачёт «часы × ставка» (тот же пропорционально), чтобы строка
-        // «X × Y = Z» оставалась верным равенством даже когда зачёт ограничен
-        // нетто-зарплатой (offPart капится по net)
-        var rawMonth = blRawMonthly(blSettings);
-        var rawPart = workedDays === dim ? rawMonth : round2(rawMonth * workedDays / dim);
-        // множитель пропорции выносим в само равенство (как в строке «Нетто»),
-        // чтобы «X × Y [× д/Д] = Z» читалось верным равенством, а не пряталось в «(пропорц.)»
-        var propFactor = workedDays === dim ? '' : (' × ' + workedDays + '/' + dim);
-        // зачёт всегда из суммы от Матав (offPart>0 ⟹ matavAmount>0)
-        var blLead = 'Платит Матав (гмлат сиуд)' + propFactor;
-        if (rawPart - offPart > 0.01) {
-          breakdown.push(blLead + ' = ' + fmtMoney(rawPart));
+        if (blRaw > offPart + 0.01) {
+          // Матав платит больше, чем есть нетто-часть → зачёт ограничен нетто
+          breakdown.push('Платит Матав (гмлат сиуд): ' + fmtMoney(blRaw));
           breakdown.push('Зачтено в пределах нетто-зарплаты: − ' + fmtMoney(offPart) +
             ' (платит организация по уходу)');
         } else {
-          breakdown.push(blLead + ' = − ' + fmtMoney(offPart) + ' (платит организация по уходу)');
+          breakdown.push('Платит Матав (гмлат сиуд): − ' + fmtMoney(offPart) +
+            ' (платит организация по уходу)');
         }
         breakdown.push('Доплата семьи: ' + fmtMoney(familyNet));
       }
@@ -634,12 +637,11 @@ window.MetapelCalc = (function () {
     var start = settings.startDate;
     var t = settings.types;
     var out = [];
-    var blOff = blMonthlyOffset(settings);
     var blSoc = blSocialOffset(settings);
     var famShare = (settings.bl && settings.bl.approved && settings.bl.applyToSocial)
       ? blFamilyShare(settings) : 1;
     if (start && /^\d{4}-\d{2}-\d{2}$/.test(start)) {
-      if (t.salary.enabled) genSalary(t.salary, start, end, out, blOff, settings.bl || {});
+      if (t.salary.enabled) genSalary(t.salary, start, end, out, rawBlOffset(settings));
       if (t.pocket.enabled) genPocket(t.pocket, start, end, out);
       if (t.insurance.enabled) genInsurance(t.insurance, start, end, out);
       if (t.bituach.enabled) genBituach(t.bituach, start, end, out, paidLog, blSoc);
@@ -718,10 +720,14 @@ window.MetapelCalc = (function () {
     var s0 = parseISO(start);
     var fromDay = (y === s0.getFullYear() && m === s0.getMonth() + 1) ? s0.getDate() : 1;
     var workedDays = endDay - fromDay + 1;
-    var netPart = round2(t.salary.net * workedDays / dim);
-    var offPart = round2(blOff * workedDays / dim);
-    var famNet = Math.max(0, round2(netPart - offPart));
     var sats = countSaturdays(y, m, fromDay, endDay);
+    // нетто последнего месяца — по календарным дням КРОМЕ суббот (как в genSalary);
+    // сумма от Матав НЕ прораторуется (фактическая за месяц), капится по нетто-части
+    var nonSatMonth = dim - countSaturdays(y, m);
+    var nonSatWorked = workedDays - sats;
+    var netPart = round2(t.salary.net * nonSatWorked / nonSatMonth);
+    var offPart = Math.min(blOff, netPart);
+    var famNet = Math.max(0, round2(netPart - offPart));
     var lastSalary = round2(famNet + sats * t.salary.shabbatRate);
     lines.push({
       text: 'Зарплата за ' + monthLabel(y, m) + ' по ' + endDay + '-е (' + workedDays +

@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.4 от 29.06.2026 (Зарплата: нетто пропорц. по дням кроме суббот; сумма Матав вычитается целиком)';
+  var APP_VERSION = '6.5 от 02.08.2026 (Синхронизация: авто-подтягивание раз в 15 минут + заметный баннер при застревании)';
 
   // ---------- «сегодня» ----------
 
@@ -235,6 +235,21 @@
       Math.round(window.innerHeight / zoom * 0.92) + 'px');
   }
 
+  // ⚠ «Синхронизация застряла» — КРУПНО на любой вкладке (кроме настроек, где и так
+  // есть строка состояния). Раньше ошибка была видна только в Настройках за паролем —
+  // застрявшее устройство неделями копило неотправленные оплаты (инцидент 02.08.2026).
+  // Специально БЕЗ инструкции «нажмите Восстановить»: на устройстве с несинхронными
+  // оплатами это стёрло бы их — разруливает родственник, а не домашние.
+  function syncAlertCard(content) {
+    if (activeTab === 'settings') return;
+    if (!window.MetapelSync.isOn(settings)) return;
+    if (!S.getMeta('lastSyncError')) return;
+    content.appendChild(el('div', 'banner banner-alert',
+      '⚠ Данные не уходят в облако' +
+      '<div class="banner-sub">Оплаты, отмеченные на этом устройстве, не видны на других. ' +
+      'Ничего не нажимайте в настройках — просто сообщите родственнику (Льву).</div>'));
+  }
+
   function render() {
     applyScale();
     var occ = withStatus(occurrences());
@@ -242,6 +257,7 @@
     renderNav(occ);
     var content = $('#content');
     content.innerHTML = '';
+    syncAlertCard(content);
     if (activeTab === 'due') { blStatusCard(content); renderDue(occ, content); }
     else if (activeTab === 'upcoming') renderUpcoming(occ, content);
     else if (activeTab === 'history') renderHistory(content);
@@ -1249,11 +1265,18 @@
     if (syncInFlight) return;
     if (!window.MetapelSync.isOn(settings)) return;
     syncInFlight = true;
-    // 1) Автоподтягивание свежей облачной копии — только если включено для среды.
-    //    На проде autoSync=false → сразу null, поведение прежнее (ручное «Восстановить»).
-    var pullStep = (window.MetapelEnv && window.MetapelEnv.autoSync)
-      ? window.MetapelSync.pullIfNewer(settings, S, C.hashString)
-      : Promise.resolve(null);
+    var errBefore = S.getMeta('lastSyncError') || null;
+    // Пролог — внутри промиса: синхронный throw (например, недопустимый символ в
+    // токене → fetch бросает TypeError сразу, не как rejected promise) иначе
+    // пролетел бы мимо catch и НАВСЕГДА оставил syncInFlight=true — sync молчал
+    // бы до перезагрузки страницы (находка ревью v6.5).
+    var pullStep = Promise.resolve().then(function () {
+      // 1) Автоподтягивание свежей облачной копии — только если включено для среды
+      //    (env.js: autoSync=true и на проде, и на stage).
+      return (window.MetapelEnv && window.MetapelEnv.autoSync)
+        ? window.MetapelSync.pullIfNewer(settings, S, C.hashString)
+        : null;
+    });
     pullStep.then(function (pulled) {
       if (pulled) {
         settings = S.loadSettings(); // подтянулась и общая «сумма от Матав»
@@ -1282,11 +1305,17 @@
             settings = S.loadSettings(); // backupIfChanged мог принять облачную «сумму от Матав»
             reloadData();
             backgroundRender();
+          } else if ((S.getMeta('lastSyncError') || null) !== errBefore) {
+            // ошибка появилась/ушла БЕЗ успешной заливки — баннер «данные не
+            // уходят в облако» должен обновиться СРАЗУ, а не при следующем
+            // действии пользователя или полуночной перерисовке (ревью v6.5)
+            backgroundRender();
           }
         });
       });
     }).catch(function () {
       syncInFlight = false;
+      if ((S.getMeta('lastSyncError') || null) !== errBefore) backgroundRender();
     });
   }
 
@@ -2136,6 +2165,28 @@
         backgroundRender(); // не стирать открытое окно или форму настроек
       }
     }, 60 * 1000);
+    // АНТИ-«ОТСТАВАНИЕ» (инцидент 02.08.2026): устройство, неделями открытое без
+    // перезапуска (машина в доме Григория), тянуло облако только при открытии;
+    // отметка оплаты на ОТСТАВШЕМ устройстве запирала данные локально (conflict).
+    // Периодический runSync держит устройство актуальным. Это безопасно: pull
+    // внутри защищён decideSync (тянет ТОЛЬКО «чистое» устройство), push — хэшем
+    // и CAS по sha, повторный вход — флагом syncInFlight, а перерисовка после
+    // pull идёт через backgroundRender (открытые окна и настройки не трогает).
+    // ФОНОВЫЙ запуск пропускаем при открытой модалке или на вкладке настроек:
+    // pull под открытой ФОРМОЙ (сумма от Матав, настройки) выровнял бы generation,
+    // и «Сохранить» потом откатило бы свежую облачную сумму устаревшим значением
+    // из полей формы (находка ревью v6.5). Ручные runSync после действий не
+    // фильтруем — они идут ПОСЛЕ записи данных.
+    function maybeAutoSync() {
+      if (document.querySelector('.modal.open')) return;
+      if (activeTab === 'settings') return;
+      runSync();
+    }
+    setInterval(maybeAutoSync, 15 * 60 * 1000);
+    // и сразу при возврате к приложению (развернули окно/вкладку)
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) maybeAutoSync();
+    });
     $('#app-version').textContent = 'Версия ' + APP_VERSION +
       (window.MetapelEnv && window.MetapelEnv.stage ? ' · 🧪 STAGE' : '');
     // офлайн-режим: приложение открывается из кэша без интернета

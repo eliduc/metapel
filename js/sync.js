@@ -295,9 +295,11 @@ window.MetapelSync = (function () {
           'Облачная копия новее этого устройства — нажмите «Восстановить» перед изменениями.');
         return false;
       }
-      // ОБЩИЙ параметр «сумма от Матав»: если облако новее (cloudGen>localGen), но мы
-      // заливаем (наши ДАННЫЕ накрывают облачные) — ПРИНИМАЕМ облачную сумму ПЕРЕД
-      // заливкой, иначе затёрли бы более новую сумму своей устаревшей (откат у всех).
+      // ОБЩИЙ параметр «суммы от Матав»: если облако новее (cloudGen>localGen), но мы
+      // заливаем (наши ДАННЫЕ накрывают облачные) — ПРИНИМАЕМ облачные суммы ПЕРЕД
+      // заливкой, иначе затёрли бы более новые своими устаревшими (откат у всех).
+      // Помесячные суммы при этом ОБЪЕДИНЯЮТСЯ: другое устройство могло ввести
+      // месяц, которого у нас нет, и он обязан уехать в облако вместе с нашими.
       applySharedSettings(settings, store,
         sharedSettingsFromCloud(cloud && cloud.settings, cloud && (cloudGen > localGen)));
       var newGen = Math.max(cloudGen, localGen) + 1;
@@ -406,32 +408,87 @@ window.MetapelSync = (function () {
     return 'conflict';
   }
 
+  // маска ключа помесячной суммы от Матав (та же, что в calc.sanitizeSettings)
+  var YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+  /**
+   * ЧИСТАЯ: объединяет помесячные суммы от Матав. Локальные ключи, поверх —
+   * облачные (облако свежее, поэтому при совпадении месяца выигрывает оно).
+   * Месяц, которого в облаке нет, СОХРАНЯЕТСЯ: устройства вводят РАЗНЫЕ месяцы,
+   * и заливка не должна стирать чужие.
+   * Мусор отбрасываем (поле приходит из облака произвольным JSON), а ключи
+   * сортируем: порядок вставки попадает в JSON бэкапа, и без сортировки два
+   * устройства с одинаковым набором месяцев давали бы разный хэш — то есть
+   * бесконечные «изменения» и лишние заливки.
+   */
+  function mergeMatavByMonth(local, cloud) {
+    var merged = {};
+    function take(src) {
+      if (!src || typeof src !== 'object' || Array.isArray(src)) return;
+      Object.keys(src).forEach(function (k) {
+        var v = src[k];
+        if (YM_RE.test(k) && typeof v === 'number' && !isNaN(v) && v >= 0) merged[k] = v;
+      });
+    }
+    take(local);
+    take(cloud);
+    var out = {};
+    Object.keys(merged).sort().forEach(function (k) { out[k] = merged[k]; });
+    return out;
+  }
+
+  function hasPositiveMonth(byMonth) {
+    if (!byMonth || typeof byMonth !== 'object') return false;
+    return Object.keys(byMonth).some(function (k) {
+      return YM_RE.test(k) && typeof byMonth[k] === 'number' && byMonth[k] > 0;
+    });
+  }
+
   // ЧИСТАЯ: что принять из облачной «суммы от Матав», если облако СВЕЖЕЕ.
   // cloudNewer — при pull всегда true (decideSync гарантирует cloudGen>localGen);
-  // при push поверх облака — (cloudGen>localGen). Возвращает {matavAmount, approved}
-  // к принятию, либо null (принимать нечего: облако не свежее / нет поля).
-  // Зачем: matavAmount — ОБЩИЙ параметр; устройство НЕ должно затирать более новую
+  // при push поверх облака — (cloudGen>localGen). Возвращает {matavAmount?, approved,
+  // matavByMonth?} к принятию, либо null (принимать нечего: облако не свежее / нет полей).
+  // Зачем: суммы от Матав — ОБЩИЙ параметр; устройство НЕ должно затирать более новую
   // облачную сумму своей устаревшей (иначе сумма «откатывалась» бы у всех — деньги).
   function sharedSettingsFromCloud(cloudSettings, cloudNewer) {
     if (!cloudNewer) return null;
-    if (!cloudSettings || !cloudSettings.bl || typeof cloudSettings.bl.matavAmount !== 'number') return null;
-    return { matavAmount: cloudSettings.bl.matavAmount, approved: !!cloudSettings.bl.approved };
+    var bl = cloudSettings && cloudSettings.bl;
+    if (!bl) return null;
+    var hasAmount = typeof bl.matavAmount === 'number';
+    var hasMonths = !!bl.matavByMonth && typeof bl.matavByMonth === 'object' && !Array.isArray(bl.matavByMonth);
+    if (!hasAmount && !hasMonths) return null; // старый/битый бэкап — принимать нечего
+    // порядок ключей значим: тесты сравнивают результат через JSON.stringify
+    var shared = {};
+    if (hasAmount) shared.matavAmount = bl.matavAmount;
+    shared.approved = !!bl.approved;
+    // облачные месяцы отдаём СЫРЫМИ: слить их здесь не с чем — локальных настроек
+    // у чистой функции нет. Объединение делает applySharedSettings.
+    if (hasMonths) shared.matavByMonth = bl.matavByMonth;
+    return shared;
   }
 
   // применяет принятую общую настройку к локальным settings и персистит (мутирует
   // settings по ссылке — вызывающий держит ту же ссылку). Возвращает true, если приняли.
   function applySharedSettings(settings, store, shared) {
     if (!shared || !settings.bl) return false;
-    settings.bl.matavAmount = shared.matavAmount;
-    settings.bl.approved = shared.approved;
+    // легаси-число принимаем, только если оно в облаке есть: иначе undefined затёр
+    // бы локальную сумму и сломал бы конфиг без помесячных данных
+    if (typeof shared.matavAmount === 'number') settings.bl.matavAmount = shared.matavAmount;
+    if (shared.matavByMonth) {
+      settings.bl.matavByMonth = mergeMatavByMonth(settings.bl.matavByMonth, shared.matavByMonth);
+    }
+    // approved — общий выключатель зачёта (calc: !approved → зачёта нет вообще).
+    // Чужой false НЕ гасит его, пока у нас есть месяц с положительной суммой: иначе
+    // устройство со старым кодом обнулило бы зачёт сразу после ввода суммы здесь.
+    settings.bl.approved = !!shared.approved || hasPositiveMonth(settings.bl.matavByMonth);
     store.saveSettings(settings);
     return true;
   }
 
   // Если в облаке более свежее поколение, а локально нет несохранённых правок —
   // молча подтягивает облачные log/extras/returns/timesheets. Из НАСТРОЕК
-  // синхронизируем ТОЛЬКО «сумму от Матав» (bl.matavAmount/approved) — это общий
-  // параметр, влияющий на расчёт зарплаты на всех устройствах; токен и прочие
+  // синхронизируем ТОЛЬКО «суммы от Матав» (bl.matavByMonth/matavAmount/approved) —
+  // это общий параметр, влияющий на расчёт на всех устройствах; токен и прочие
   // личные настройки остаются локальными (как и при ручном восстановлении).
   // Возвращает {generation} при подтягивании, иначе null. Конфликт (локальные
   // правки + облако новее) НЕ перезаписывает — это подсветит backupIfChanged
@@ -458,7 +515,7 @@ window.MetapelSync = (function () {
       if (decideSync(state) !== 'pull') return null;
       // безопасно: локально несохранённого нет. replaceData заодно чистит syncQueue.
       store.replaceData({ log: cloud.log || {}, extras: cloud.extras || [], returns: cloud.returns || [], timesheets: cloud.timesheets || [] });
-      // подтянуть ОБЩУЮ «сумму от Матав» из облака (при pull облако всегда свежее).
+      // подтянуть ОБЩИЕ «суммы от Матав» из облака (при pull облако всегда свежее).
       // Применяем ДО пересчёта lastBackupHash, чтобы хэш отражал новое состояние
       // (иначе следующая синхронизация сочла бы локальное изменённым).
       applySharedSettings(settings, store, sharedSettingsFromCloud(cloud.settings, true));
@@ -477,6 +534,8 @@ window.MetapelSync = (function () {
     pullIfNewer: pullIfNewer,
     decideSync: decideSync,
     sharedSettingsFromCloud: sharedSettingsFromCloud,
+    applySharedSettings: applySharedSettings, // нужна тестам и «Восстановить» в app.js
+    mergeMatavByMonth: mergeMatavByMonth,
     localSupersedesCloud: localSupersedesCloud,
     fetchBackup: fetchBackup,
     buildBackupJson: buildBackupJson,

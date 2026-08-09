@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.6 от 10.08.2026 (Битуах Леуми: взносы могут начинаться позже трудоустройства — fromMonth)';
+  var APP_VERSION = '6.7 от 10.08.2026 (сумма от Матав вводится за каждый месяц отдельно — одна цифра на все месяцы больше не применяется)';
 
   // ---------- «сегодня» ----------
 
@@ -258,7 +258,7 @@
     var content = $('#content');
     content.innerHTML = '';
     syncAlertCard(content);
-    if (activeTab === 'due') { blStatusCard(content); renderDue(occ, content); }
+    if (activeTab === 'due') { blStatusCard(content, occ); renderDue(occ, content); }
     else if (activeTab === 'upcoming') renderUpcoming(occ, content);
     else if (activeTab === 'history') renderHistory(content);
     else if (activeTab === 'advance') renderAdvance(content);
@@ -341,6 +341,11 @@
     head.appendChild(el('div', 'card-amount', C.fmtMoney(o.amount)));
     div.appendChild(head);
 
+    // сумма от Матав за месяц этого начисления: без неё зарплату посчитать
+    // нельзя, а взносы/пикадон считаются по неполному набору месяцев
+    if (o.type === 'salary' && occMonth(o)) div.appendChild(matavRow(o));
+    else if (o.blMissing) div.appendChild(matavMissingRow(o));
+
     // большая кнопка-раскрывашка вместо мелкого <details>
     var btnB = el('button', 'btn-breakdown', '📖 Как посчитана сумма ▾');
     var body = el('ul', 'breakdown-body');
@@ -352,7 +357,7 @@
     div.appendChild(btnB);
     div.appendChild(body);
 
-    if (withPayBtn) {
+    if (withPayBtn && !payBlocked(o)) {
       var actions = el('div', 'card-actions');
       var btn = el('button', 'btn btn-pay', '✓ Я заплатил');
       btn.addEventListener('click', function () { openPayModal(o); });
@@ -364,6 +369,29 @@
 
   function sumAmounts(list) {
     return list.reduce(function (s, o) { return s + o.amount; }, 0);
+  }
+
+  // Начисление, посчитанное БЕЗ суммы от Матав, платить нельзя. Отметка об оплате
+  // ВЕЧНАЯ: getStatus по тому же id всегда вернёт 'paid', а отдельного «добора»
+  // разницы в приложении нет. Поэтому оплаченный неполный квартальный Битуах
+  // закрывал бы квартал навсегда — недоплата (напр. 53,45 ₪ вместо 160,35 ₪)
+  // исчезала бы со всех экранов, а это дыра в страховом стаже работника.
+  // У зарплаты и помесячных взносов сумма и вовсе нулевая, у хавраа — завышенная.
+  // Сначала ввести суммы месяцев, потом платить.
+  function payBlocked(o) {
+    return !!o.blMissing;
+  }
+
+  // Итог складывается из amount, а начисление без суммы от Матав посчитано неверно:
+  // зарплата и помесячные взносы — нулём, квартальный Битуах — по неполному набору
+  // месяцев, хавраа — наоборот по ПОЛНОЙ доле семьи (то есть завышена). Молча
+  // принятый итог владелец счёл бы верным — пишем, сколько начислений в нём неточны.
+  function missingNote(list) {
+    var n = list.filter(function (o) { return o.blMissing; }).length;
+    if (!n) return '';
+    return '<br>⚠ Итог неточный: ' + n + ' ' +
+      C.plural(n, 'начисление посчитано', 'начисления посчитаны', 'начислений посчитаны') +
+      ' без суммы от Матав — введите её, и суммы пересчитаются.';
   }
 
   function renderDue(occ, content) {
@@ -380,86 +408,243 @@
       '⚠️ Нужно заплатить: ' + C.fmtMoney(sumAmounts(due)) +
       '<div class="banner-sub">' + due.length + ' ' +
       C.plural(due.length, 'платёж', 'платежа', 'платежей') +
-      ' — список ниже. После каждой оплаты нажмите зелёную кнопку.</div>'));
+      ' — список ниже. После каждой оплаты нажмите зелёную кнопку.' +
+      missingNote(due) + '</div>'));
     due.forEach(function (o) { content.appendChild(card(o, true)); });
   }
 
-  // ---------- часы Битуах Леуми: статус на главном экране ----------
+  // ---------- сумма от Матав (гмлат сиуд): помесячно ----------
 
-  // прямая сумма от Матав (₪/мес): ≥ 0, округление до копеек
+  // прямая сумма от Матав (₪ за месяц): ≥ 0, округление до копеек
   function clampAmount(v) {
     if (isNaN(v) || v < 0) return 0;
     return C.round2(v);
   }
 
-  function blStatusCard(content) {
-    var bl = settings.bl || {};
-    if (bl.approved) {
-      var cardA = el('div', 'bl-card bl-approved',
-        '✅ <b>Матав (гмлат сиуд) платит: ' + C.fmtMoney(bl.matavAmount || 0) + ' в месяц</b>' +
-        '<div class="bl-sub">Эта сумма вычтена из зарплаты — суммы ниже это доплата семьи.</div>');
-      var btnA = el('button', 'btn btn-light', '✎ Изменить сумму от Матав');
-      btnA.addEventListener('click', openHoursModal);
-      cardA.appendChild(btnA);
-      content.appendChild(cardA);
-    } else {
-      var cardP = el('div', 'bl-card bl-pending',
-        '<div class="bl-sub">Введите сумму оплаты от Матав (гмлат сиуд) за последний месяц.</div>');
-      var btnP = el('button', 'btn btn-light', '✓ Указать сумму от Матав');
-      btnP.addEventListener('click', openHoursModal);
-      cardP.appendChild(btnP);
-      content.appendChild(cardP);
-    }
+  var YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/; // ключ месяца в settings.bl.matavByMonth
+
+  function ymParse(key) {
+    var p = /^(\d{4})-(\d{2})$/.exec(key || '');
+    return (p && YM_RE.test(key)) ? { y: +p[1], m: +p[2] } : null;
   }
 
-  function openHoursModal() {
-    var bl = settings.bl || {};
-    $('#hours-input').value = bl.matavAmount || 0;
-    $('#hours-revert').style.display = bl.approved ? '' : 'none';
+  function ymLabel(key) {
+    var p = ymParse(key);
+    return p ? C.monthLabel(p.y, p.m) : String(key);
+  }
+
+  // Месяц НАЧИСЛЕНИЯ, а не календарный: зарплата за июнь платится 9 июля.
+  // Берём поле occurrence, а если его нет — из id вида 'salary-2026-06'
+  // (у квартального Битуаха id другой — 'bituach-2026-Q3' — и месяца тут нет).
+  function occMonth(o) {
+    if (o.month && YM_RE.test(o.month)) return o.month;
+    var p = /-(\d{4})-(0[1-9]|1[0-2])$/.exec(o.id || '');
+    return p ? p[1] + '-' + p[2] : null;
+  }
+
+  function matavAmountFor(ym) {
+    var p = ymParse(ym);
+    return p ? C.matavForMonth(settings, p.y, p.m) : null;
+  }
+
+  // Учитывать суммы от Матав можно, пока есть хоть одна ВВЕДЁННАЯ: старая единая
+  // (matavAmount) или любая помесячная — включая нулевую («за этот месяц Матав не
+  // платил» — это данные, а не пустота). Условие то же, что в calc.sanitizeSettings:
+  // разойдутся — сохранение настроек будет гасить учёт, который sanitize оставил.
+  // Если снять approved, зачёт обнулится СРАЗУ ВО ВСЕХ месяцах (правило 1
+  // matavForMonth), причём молча — тихое завышение доплаты семьи.
+  function blHasAmount(bl) {
+    if (!bl) return false;
+    if (typeof bl.matavAmount === 'number' && bl.matavAmount > 0) return true;
+    var by = bl.matavByMonth;
+    if (!by || typeof by !== 'object') return false;
+    return Object.keys(by).some(function (k) {
+      return YM_RE.test(k) && typeof by[k] === 'number' && !isNaN(by[k]) && by[k] >= 0;
+    });
+  }
+
+  // Порядок ключей объекта попадает в JSON бэкапа, а по его хэшу синхронизация
+  // решает «изменилось / не изменилось». Держим месяцы отсортированными, иначе
+  // два устройства с одинаковыми суммами дают разный хэш и вечные перезаливки.
+  function sortedMonths(by) {
+    var out = {};
+    Object.keys(by).sort().forEach(function (k) { out[k] = by[k]; });
+    return out;
+  }
+
+  // месяц, за который сейчас платится зарплата (для верхней карточки):
+  // из ближайшего неоплаченного начисления, а не из календаря
+  function currentSalaryMonth(occ) {
+    var sal = occ.filter(function (o) { return o.type === 'salary' && o.status !== 'paid'; });
+    var due = sal.filter(function (o) { return o.status === 'due' || o.status === 'overdue'; });
+    var pick = (due.length ? due : sal)[0];
+    return pick ? occMonth(pick) : null;
+  }
+
+  // кнопки в блоке про Матав — отдельной строкой (иначе прилипают к тексту)
+  function blButtons(box, buttons) {
+    var actions = el('div', 'card-actions');
+    buttons.forEach(function (b) { actions.appendChild(b); });
+    box.appendChild(actions);
+    return box;
+  }
+
+  function matavButton(ym, label, cls) {
+    var btn = el('button', 'btn ' + cls, label);
+    btn.type = 'button';
+    btn.addEventListener('click', function () { openMatavModal(ym); });
+    return btn;
+  }
+
+  // Учёт выключен (bl.approved = false) — это НЕ «сумма не введена»: расчёт идёт
+  // без зачёта, как будто Матав не платит вовсе (matavForMonth возвращает 0).
+  // Показываем это отдельным состоянием, иначе «0 ₪» выглядит как введённая сумма.
+  function blOff() { return !(settings.bl && settings.bl.approved); }
+
+  function blStatusCard(content, occ) {
+    var ym = currentSalaryMonth(occ);
+    if (!ym) return; // не за какой месяц вводить — карточку не показываем
+    // Если карточка зарплаты за этот же месяц и так в списке ниже, она уже
+    // показывает и сумму от Матав, и кнопку ввода (matavRow) — второй такой же
+    // блок сверху только удлиняет экран вдвое.
+    var inList = occ.some(function (o) {
+      return o.type === 'salary' && occMonth(o) === ym &&
+        (o.status === 'due' || o.status === 'overdue');
+    });
+    if (inList) return;
+    var amt = matavAmountFor(ym);
+    var box;
+    if (blOff()) {
+      box = el('div', 'bl-card bl-pending',
+        '<div class="bl-sub">Учёт суммы от Матав (гмлат сиуд) выключен — суммы ниже ' +
+        'посчитаны так, будто Матав не платит. Введите присланную сумму, и она будет вычтена.</div>');
+      blButtons(box, [matavButton(ym, '✓ Указать сумму от Матав', 'btn-light')]);
+    } else if (amt == null) {
+      box = el('div', 'bl-card bl-pending',
+        '⚠ <b>Сумма от Матав за ' + esc(ymLabel(ym)) + ' не введена</b>' +
+        '<div class="bl-sub">Матав присылает её 9-го числа, и каждый месяц она разная. ' +
+        'Пока не введёте — зарплату за этот месяц посчитать нельзя.</div>');
+      blButtons(box, [matavButton(ym, '✓ Ввести сумму от Матав', 'btn-pay')]);
+    } else {
+      box = el('div', 'bl-card bl-approved',
+        '✅ <b>Матав за ' + esc(ymLabel(ym)) + ': ' + C.fmtMoney(amt) + '</b>' +
+        '<div class="bl-sub">Эта сумма вычтена из зарплаты — суммы ниже это доплата семьи.</div>');
+      blButtons(box, [matavButton(ym, '✎ Изменить сумму от Матав', 'btn-light')]);
+    }
+    content.appendChild(box);
+  }
+
+  // строка про Матав в карточке зарплаты: сумма месяца либо призыв её ввести
+  function matavRow(o) {
+    var ym = occMonth(o);
+    var amt = matavAmountFor(ym);
+    var box;
+    if (blOff()) {
+      box = el('div', 'bl-card bl-pending',
+        '<div class="bl-sub">Учёт суммы от Матав выключен — зарплата посчитана полностью, ' +
+        'без вычета гмлат сиуд.</div>');
+      blButtons(box, [matavButton(ym, '✓ Указать сумму от Матав за ' + esc(ymLabel(ym)), 'btn-light')]);
+    } else if (amt == null) {
+      box = el('div', 'bl-card bl-pending',
+        '⚠ <b>Сумма от Матав за ' + esc(ymLabel(ym)) + ' не введена</b>' +
+        '<div class="bl-sub">Введите сумму, присланную Матав, — карточка пересчитается.</div>');
+      blButtons(box, [matavButton(ym, '✓ Ввести сумму от Матав', 'btn-pay')]);
+    } else {
+      box = el('div', 'bl-card bl-approved',
+        '🤝 <b>Матав за ' + esc(ymLabel(ym)) + ': ' + C.fmtMoney(amt) + '</b>');
+      blButtons(box, [matavButton(ym, '✎ Изменить сумму от Матав', 'btn-light')]);
+    }
+    return box;
+  }
+
+  // Взносы и пикадон считаются помесячно: месяц без суммы от Матав в начисление
+  // не вошёл. Даём ввести его прямо отсюда — карточка зарплаты за тот месяц
+  // могла быть уже оплачена и с экрана исчезнуть. Про «занижено» здесь не пишем:
+  // у хавраа без суммы доля семьи берётся полной, то есть начисление ЗАВЫШЕНО.
+  function matavMissingRow(o) {
+    var months = (o.missingMonths || []).filter(function (k) { return YM_RE.test(k); });
+    var box = el('div', 'bl-card bl-pending',
+      '⚠ <b>Сумма неточная: нет данных от Матав</b>' +
+      '<div class="bl-sub">Не введена сумма за: ' +
+      (months.length ? esc(months.map(ymLabel).join(', ')) : 'часть месяцев') +
+      '. Пока их нет, платить это начисление нельзя — сумма посчитана неверно.</div>');
+    return blButtons(box, months.map(function (k) {
+      return matavButton(k, '✎ Ввести за ' + esc(ymLabel(k)), 'btn-light');
+    }));
+  }
+
+  var matavMonth = null; // месяц ('YYYY-MM'), который правится в окне #modal-hours
+
+  function openMatavModal(ym) {
+    if (!YM_RE.test(ym || '')) { appAlert('Не удалось определить месяц.'); return; }
+    matavMonth = ym;
+    var cur = matavAmountFor(ym);
+    var box = $('#modal-hours');
+    box.querySelector('h2').textContent = '🤝 Сумма от Матав за ' + ymLabel(ym);
+    box.querySelector('.muted').textContent = 'Матав присылает сумму 9-го числа, и каждый ' +
+      'месяц она разная. Введите ту, что пришла за ' + ymLabel(ym) + ', — остальное доплачивает семья.';
+    box.querySelector('label[for="hours-input"]').textContent = 'Матав заплатил, ₪';
+    var inp = $('#hours-input');
+    inp.step = '0.01'; // суммы копеечные (напр. 4959.03) — шаг разметки в 100 ₪ их бы испортил
+    // пусто, а не 0: «сумма не введена» и «введён ноль» — разные состояния
+    inp.value = (cur == null ? '' : cur);
+    // «Матав вообще не платит» в помесячной модели = ввод нуля за месяц (кнопка
+    // глобального отключения убрана: отсюда она обнулила бы и все прочие месяцы;
+    // выключатель учёта — галочка раздела «Гмлат сиуд» в настройках)
     updateHoursEffect();
-    $('#modal-hours').classList.add('open');
+    box.classList.add('open');
     updateScrollLock();
   }
 
   function stepHours(delta) {
     var v = parseFloat($('#hours-input').value);
     if (isNaN(v)) v = 0;
-    v = clampAmount(v + delta * 100); // шаг ±100 ₪
+    v = clampAmount(v + delta * 100); // шаг ±100 ₪, копейки правятся вводом
     $('#hours-input').value = v;
     updateHoursEffect();
   }
 
   function updateHoursEffect() {
-    var amt = clampAmount(parseFloat($('#hours-input').value));
+    if (!matavMonth) return; // окно закрыто — подсказке не о каком месяце говорить
+    var raw = parseFloat($('#hours-input').value);
+    if (isNaN(raw)) {
+      $('#hours-effect').textContent = 'Введите сумму, присланную Матав за ' +
+        ymLabel(matavMonth) + ', — карточка пересчитается.';
+      return;
+    }
+    var amt = clampAmount(raw);
     var net = (settings.types && settings.types.salary) ? settings.types.salary.net : amt;
     var doplata = Math.max(0, C.round2(net - Math.min(amt, net)));
-    $('#hours-effect').textContent = 'Матав платит ≈ ' + C.fmtMoney(amt) +
-      ' в месяц → ваша доплата зарплаты ≈ ' + C.fmtMoney(doplata) + ' (плюс субботы).';
+    $('#hours-effect').textContent = 'Матав за ' + ymLabel(matavMonth) + ': ' + C.fmtMoney(amt) +
+      ' → ваша доплата зарплаты ≈ ' + C.fmtMoney(doplata) + ' (плюс субботы).';
   }
 
-  function saveHours() {
+  function saveMatavMonth() {
     if (!actionGuard()) return;
+    if (!YM_RE.test(matavMonth || '')) { appAlert('Не выбран месяц.'); return; }
     var raw = parseFloat($('#hours-input').value);
-    if (isNaN(raw) || raw < 0) { appAlert('Укажите сумму от Матав (₪ в месяц). 0 — если Матав не платит.'); return; }
+    if (isNaN(raw) || raw < 0) {
+      appAlert('Укажите сумму, присланную Матав (₪). 0 — если за этот месяц Матав не платил.');
+      return;
+    }
     var amt = clampAmount(raw);
-    settings.bl.matavAmount = amt;
-    settings.bl.approved = amt > 0; // 0 — учёт суммы от Матав выключается
+    var saved = matavMonth;
+    settings.bl = settings.bl || {};
+    var src = (settings.bl.matavByMonth && typeof settings.bl.matavByMonth === 'object')
+      ? settings.bl.matavByMonth : {};
+    var by = {};
+    Object.keys(src).forEach(function (k) { by[k] = src[k]; });
+    by[saved] = amt;
+    settings.bl.matavByMonth = sortedMonths(by);
+    // Ввод месяца (в том числе нулевого) означает «суммы от Матав ведём»: без
+    // approved зачёт не применяется НИГДЕ (правило 1 matavForMonth), и остальные
+    // месяцы посчитались бы по полной базе молча, без пометки «не введено».
+    settings.bl.approved = true;
     S.saveSettings(settings);
     settings = S.loadSettings();
-    closeModals();
+    closeModals(); // сбрасывает matavMonth — месяц запомнили выше
     render();
-    showToast(amt > 0 ? '✓ Сумма от Матав сохранена' : '✓ Учёт суммы от Матав отключён');
-    runSync();
-  }
-
-  function revertHours() {
-    if (!actionGuard()) return;
-    settings.bl.approved = false;
-    S.saveSettings(settings);
-    settings = S.loadSettings();
-    closeModals();
-    render();
-    showToast('✓ Отмечено: часы не утверждены');
+    showToast('✓ Матав за ' + ymLabel(saved) + ': сумма сохранена');
     runSync();
   }
 
@@ -842,7 +1027,7 @@
     var unpaid = occ.filter(function (o) { return o.status !== 'paid'; });
     content.appendChild(el('div', 'summary',
       'Всего заплатить в ближайшие ' + HORIZON_DAYS + ' дней: <b>' +
-      C.fmtMoney(sumAmounts(unpaid)) + '</b>'));
+      C.fmtMoney(sumAmounts(unpaid)) + '</b>' + missingNote(unpaid)));
     if (!up.length) {
       content.appendChild(el('div', 'empty', 'Ближайших платежей нет.'));
       return;
@@ -1040,6 +1225,12 @@
   // ---------- диалог оплаты ----------
 
   function openPayModal(o) {
+    // страховка на случай устаревшей карточки (фоновая синхронизация могла
+    // убрать сумму от Матав): платить по непосчитанному начислению нечего
+    if (payBlocked(o)) {
+      appAlert('Сначала введите сумму, присланную Матав, — без неё это начисление не посчитано.');
+      return;
+    }
     currentPay = o;
     $('#pay-title').textContent = (TYPE_ICONS[o.type] || '💵') + ' ' + o.title;
     $('#pay-due').textContent = 'Срок: ' + C.fmtDate(o.dueDate);
@@ -1097,6 +1288,10 @@
 
   function confirmPay() {
     if (!actionGuard()) return;
+    if (currentPay && payBlocked(currentPay)) {
+      appAlert('Сначала введите сумму, присланную Матав, — без неё это начисление не посчитано.');
+      return;
+    }
     var amount = parseFloat($('#pay-amount').value);
     var paidDate = $('#pay-date').value;
     if (isNaN(amount) || amount < 0) { appAlert('Укажите сумму.'); return; }
@@ -1298,11 +1493,16 @@
         }
       });
       // 3) дослать расписки и 4) залить локальные изменения (если есть и не устарели)
+      // Суммы от Матав принимаются ВНУТРИ backupIfChanged, ДО заливки: если сама
+      // заливка потом упадёт (CAS 409, обрыв сети), в хранилище уже новые суммы, а
+      // на экране остались бы карточки по старым — и заплатить можно по устаревшей
+      // цифре (диалог оплаты берёт сумму из отрисованного начисления).
+      var blBefore = JSON.stringify(settings.bl || null);
       return window.MetapelSync.processQueue(settings, S, null).then(function (sent) {
         return window.MetapelSync.backupIfChanged(settings, S, C.hashString).then(function (backedUp) {
           syncInFlight = false;
-          if (sent > 0 || backedUp) {
-            settings = S.loadSettings(); // backupIfChanged мог принять облачную «сумму от Матав»
+          settings = S.loadSettings(); // backupIfChanged мог принять облачную «сумму от Матав»
+          if (sent > 0 || backedUp || JSON.stringify(settings.bl || null) !== blBefore) {
             reloadData();
             backgroundRender();
           } else if ((S.getMeta('lastSyncError') || null) !== errBefore) {
@@ -1460,6 +1660,50 @@
     return '🟢 Состояние: всё отправлено.';
   }
 
+  // Список сумм от Матав по месяцам в настройках: правка существующих и
+  // добавление месяца. ВАЖНО: полям этого списка НЕ ставим dataset.path —
+  // иначе их подхватит общий сборщик формы (saveSettingsForm) и попытается
+  // записать значение по несуществующему пути настроек.
+  function renderMatavMonths(fs) {
+    var bl = settings.bl || {};
+    var by = (bl.matavByMonth && typeof bl.matavByMonth === 'object') ? bl.matavByMonth : {};
+    var keys = Object.keys(by).filter(function (k) { return YM_RE.test(k); }).sort().reverse();
+    if (!keys.length) {
+      fs.appendChild(el('div', 'hint', 'Помесячных сумм пока нет' +
+        (bl.matavAmount > 0
+          ? ' — пока считается по старой единой сумме ' + C.fmtMoney(bl.matavAmount) +
+            ' в месяц. Как только введёте первый месяц, считаться будут только помесячные суммы.'
+          : '.')));
+    }
+    keys.forEach(function (k) {
+      var row = el('div', 'form-row');
+      row.appendChild(el('label', null,
+        esc(ymLabel(k)) + ': <b>' + C.fmtMoney(by[k]) + '</b>'));
+      var btn = el('button', 'btn btn-light', '✎ Изменить');
+      btn.type = 'button';
+      btn.addEventListener('click', function () { openMatavModal(k); });
+      row.appendChild(btn);
+      fs.appendChild(row);
+    });
+    var addRow = el('div', 'form-row');
+    var lbl = el('label', null, 'Добавить месяц');
+    lbl.htmlFor = 'matav-add-month';
+    addRow.appendChild(lbl);
+    // <input type="month"> даёт готовый формат 'YYYY-MM' — руками ключ не собираем
+    var inp = el('input');
+    inp.type = 'month';
+    inp.id = 'matav-add-month';
+    addRow.appendChild(inp);
+    var add = el('button', 'btn btn-light', '➕ Ввести сумму');
+    add.type = 'button';
+    add.addEventListener('click', function () {
+      if (!YM_RE.test(inp.value)) { appAlert('Выберите месяц (год и месяц).'); return; }
+      openMatavModal(inp.value);
+    });
+    addRow.appendChild(add);
+    fs.appendChild(addRow);
+  }
+
   function settingsForm() {
     return [
       { section: 'Общие', fields: [
@@ -1473,13 +1717,17 @@
         { path: 'passwordTtlMinutes', label: 'Помнить пароль настроек, минут', type: 'number' }
       ] },
       { section: '🤝 Гмлат сиуд: сколько платит Матав', enable: 'bl.approved',
+        // список сумм по месяцам рисуется своим кодом (renderMatavMonths):
+        // одним полем формы его не выразить, а старое единое поле bl.matavAmount
+        // убрано из интерфейса — оно осталось только в данных, для совместимости
+        custom: renderMatavMonths,
         hint: 'Матав платит работнику часть зарплаты (за счёт пособия по уходу от ' +
-          'Битуах Леуми), остальное доплачиваете вы. Укажите сумму, которую Матав ' +
-          'платит в месяц — её удобнее задавать на главном экране кнопкой «Указать ' +
-          'сумму от Матав» (меняется месяц к месяцу). Галочка слева — учитывать эту ' +
-          'сумму. Сейчас учтено: ' + C.fmtMoney(C.blMonthlyOffset(settings)) + ' в месяц.',
+          'Битуах Леуми), остальное доплачиваете вы. Сумма приходит 9-го числа и ' +
+          'каждый месяц РАЗНАЯ, поэтому вводится за конкретный месяц: на главном ' +
+          'экране кнопкой у карточки зарплаты или в списке выше. Галочка слева — ' +
+          'учитывать эти суммы. Суммы месяцев сохраняются сразу, отдельной кнопкой ' +
+          'окна; если вы правили другие поля — сначала нажмите «Сохранить настройки».',
         fields: [
-        { path: 'bl.matavAmount', label: 'Матав платит, ₪ в месяц', type: 'number', min: 0 },
         { path: 'bl.applyToSocial', label: 'Уменьшать также взносы, пикадон и хавраа', type: 'checkbox' }
       ] },
       { section: '🧮 Окончание работы (для калькулятора)',
@@ -1658,6 +1906,7 @@
         row.appendChild(input);
         fs.appendChild(row);
       });
+      if (sec.custom) sec.custom(fs); // раздел со своей разметкой (список месяцев Матав)
       if (sec.hint) fs.appendChild(el('div', 'hint', esc(sec.hint)));
       form.appendChild(fs);
     });
@@ -1709,6 +1958,17 @@
           window.MetapelSync.fetchBackup(settings).then(function (data) {
             data.settings = data.settings || {};
             data.settings.sync = settings.sync; // токен этого устройства сохраняем
+            // Помесячные суммы от Матав — ОБЩИЙ параметр: их вводят на разных
+            // устройствах, а «Восстановить» подменяет настройки облачными ЦЕЛИКОМ.
+            // Без слияния месяцы, введённые здесь и ещё не уехавшие в облако,
+            // пропали бы — и вместо них снова заработала бы легаси-цифра, одна на
+            // все месяцы (ровно тот дефект, ради которого суммы стали помесячными).
+            // Именно эту кнопку приложение и советует нажать при «облако новее».
+            var rbl = data.settings.bl = data.settings.bl || {};
+            rbl.matavByMonth = window.MetapelSync.mergeMatavByMonth(
+              (settings.bl || {}).matavByMonth, rbl.matavByMonth);
+            // сохранённые месяцы без approved не применятся вообще (правило 1)
+            if (Object.keys(rbl.matavByMonth).length) rbl.approved = true;
             S.saveSettings(data.settings);
             // ВАЖНО: восстанавливаем И табели — иначе устройство после «Восстановить»
             // остаётся без них (они есть в бэкапе), и автоподтягивание потом считает
@@ -1780,9 +2040,12 @@
       if (p1.length < 4) { appAlert('Пароль должен быть не короче 4 символов.'); return; }
       draft.passwordHash = C.hashString(p1);
     }
-    // approved привязан к сумме от Матав: галочка раздела «Гмлат сиуд» без
-    // введённой суммы не должна включать учёт (иначе занижение доплаты семьи)
-    if (draft.bl) draft.bl.approved = (typeof draft.bl.matavAmount === 'number' && draft.bl.matavAmount > 0);
+    // approved привязан к суммам от Матав: галочка раздела «Гмлат сиуд» без единой
+    // введённой суммы не должна включать учёт (иначе занижение доплаты семьи).
+    // Но и подменять галочку нельзя: снятая вручную — это единственный способ
+    // сказать «Матав больше не платит» и вернуться к полной зарплате, а прежнее
+    // безусловное присваивание делало галочку мёртвой.
+    if (draft.bl) draft.bl.approved = !!draft.bl.approved && blHasAmount(draft.bl);
     S.saveSettings(draft);
     settings = S.loadSettings();
     render();
@@ -1822,10 +2085,15 @@
     var t = realToday(); // уведомление — раз в реальный день
     if (S.getMeta('lastNotify') === t) return;
     S.setMeta('lastNotify', t);
+    // сумма считается по amount, а начисления без суммы от Матав в ней нулевые:
+    // на экране про это пишет missingNote, в уведомлении — эта же оговорка,
+    // иначе с экрана блокировки цифра выглядит как полная сумма к оплате
+    var incomplete = due.filter(function (o) { return o.blMissing; }).length;
     showSystemNotification('Выплаты метапелю — ' + settings.workerName, {
       body: 'Требуют внимания: ' + due.length + ' ' +
         C.plural(due.length, 'платёж', 'платежа', 'платежей') +
-        ' на ' + C.fmtMoney(due.reduce(function (s, o) { return s + o.amount; }, 0)),
+        ' на ' + C.fmtMoney(due.reduce(function (s, o) { return s + o.amount; }, 0)) +
+        (incomplete ? ' (без учёта ' + incomplete + ' — не введена сумма от Матав)' : ''),
       tag: 'metapel-daily'
     });
   }
@@ -1894,6 +2162,7 @@
     currentSign = null;
     signCallback = null;
     tsPreviewSave = null;
+    matavMonth = null;
     confirmCallback = null;
     updateScrollLock();
     // полсекунды игнорируем касания: «дребезг» пальца после закрытия окна
@@ -1910,7 +2179,9 @@
     if (settings._v6) return;
     settings._v6 = true;
     settings.bl = settings.bl || {};
-    settings.bl.approved = (typeof settings.bl.matavAmount === 'number' && settings.bl.matavAmount > 0);
+    // помесячные суммы тоже считаются «введённой суммой»: устройство, которое ещё
+    // не мигрировало, но уже получило matavByMonth из облака, иначе снесло бы approved
+    settings.bl.approved = blHasAmount(settings.bl);
     if (settings.types) {
       if (settings.types.visa) settings.types.visa.enabled = false;
       if (settings.types.permit) settings.types.permit.enabled = false;
@@ -2091,12 +2362,11 @@
     });
     $('#final-calc').addEventListener('click', runFinalCalc);
 
-    // часы Битуах Леуми (главный экран)
+    // сумма от Матав за месяц (окно вызывается с карточки зарплаты и из настроек)
     $('#hours-minus').addEventListener('click', function () { stepHours(-1); });
     $('#hours-plus').addEventListener('click', function () { stepHours(1); });
     $('#hours-input').addEventListener('input', updateHoursEffect);
-    $('#hours-save').addEventListener('click', saveHours);
-    $('#hours-revert').addEventListener('click', revertHours);
+    $('#hours-save').addEventListener('click', saveMatavMonth);
 
     // загрузка табеля Битуах Леуми (PDF) — метаданные локально, файл в архив
     $('#ts-file-input').addEventListener('change', function (e) {

@@ -452,6 +452,19 @@ window.MetapelCalc = (function () {
       : null;
   }
 
+  // Обязанность платить взносы может возникать ПОЗЖЕ трудоустройства.
+  // t.fromMonth — номер месяца работы, с которого идут взносы (как у пикадона):
+  // 1 или поле отсутствует = с первого месяца, прежнее поведение.
+  // Возвращает 1-е число первого облагаемого месяца (или null, если ограничения
+  // нет). Именно 1-е число: первый облагаемый месяц считается ПОЛНЫМ, а не
+  // пропорционально дате выхода на работу.
+  function bituachSkipBefore(t, start) {
+    var n = (t && typeof t.fromMonth === 'number' && t.fromMonth > 1) ? t.fromMonth : 1;
+    if (n === 1) return null;
+    var d = parseISO(addMonthsISO(start, n - 1));
+    return mkDate(d.getFullYear(), d.getMonth() + 1, 1);
+  }
+
   // При переключении частоты месяц/квартал оплаченные записи другого
   // режима остаются в журнале — учитываем их, чтобы не требовать
   // повторной оплаты тех же месяцев.
@@ -461,7 +474,9 @@ window.MetapelCalc = (function () {
       genBituachQuarterly(t, start, end, out, paidLog, blOff);
       return;
     }
+    var minISO = bituachSkipBefore(t, start);
     eachWorkedMonth(start, end, function (y, m, fromDay) {
+      if (minISO && mkDate(y, m, 1) < minISO) return; // взносы ещё не начались
       var q = Math.floor((m - 1) / 3) + 1;
       if (paidLog['bituach-' + y + '-Q' + q]) return; // месяц покрыт оплаченным кварталом
       var due = nextMonthDue(y, m, t.dayOfMonth);
@@ -494,7 +509,9 @@ window.MetapelCalc = (function () {
     paidLog = paidLog || {};
     if (bituachMonthly(t, blOff) <= 0) return; // часы БЛ покрывают всю базу
     var months = {}; // 'y-m' -> {y, m, amount}
+    var minISO = bituachSkipBefore(t, start);
     eachWorkedMonth(start, end, function (y, m, fromDay) {
+      if (minISO && mkDate(y, m, 1) < minISO) return; // взносы ещё не начались
       if (paidLog['bituach-' + y + '-' + pad2(m)]) return; // месяц уже оплачен помесячно
       var dim = daysInMonth(y, m);
       var workedDays = dim - fromDay + 1;

@@ -485,10 +485,54 @@ window.MetapelSync = (function () {
     return true;
   }
 
+  // Настройки, которые у каждого устройства СВОИ и между устройствами НЕ ездят:
+  //   sync    — токен и включённость синхронизации (у каждого устройства свой токен);
+  //   uiScale — размер текста (на планшете крупный, на компьютере обычный).
+  // Всё остальное (типы выплат, ставки, даты начисления, частота Битуах, пароль)
+  // — ОБЩЕЕ: правится на одном устройстве, а действовать обязано на всех.
+  var DEVICE_LOCAL_SETTINGS = ['sync', 'uiScale'];
+
+  // ЧИСТАЯ: облачные настройки + локальные device-local поля. Возвращает НОВЫЙ
+  // объект либо null, если в облаке настроек нет.
+  // Зачем: раньше структурные настройки доезжали ТОЛЬКО через кнопку
+  // «Восстановить», и до её нажатия устройства считали деньги по-разному —
+  // на одном Битуах помесячно, на другом квартально; зарплата 8-го против 9-го.
+  function mergeSettingsFromCloud(local, cloudSettings) {
+    if (!cloudSettings || typeof cloudSettings !== 'object') return null;
+    var merged = JSON.parse(JSON.stringify(cloudSettings));
+    for (var i = 0; i < DEVICE_LOCAL_SETTINGS.length; i++) {
+      var k = DEVICE_LOCAL_SETTINGS[i];
+      if (local && typeof local[k] !== 'undefined') {
+        merged[k] = JSON.parse(JSON.stringify(local[k]));
+      } else {
+        delete merged[k]; // нет локального — пусть подставится дефолт при loadSettings
+      }
+    }
+    // Помесячные суммы от Матав — ОБЪЕДИНЕНИЕМ, а не заменой: месяц, введённый
+    // на этом устройстве и ещё не уехавший в облако, терять нельзя.
+    if (merged.bl) {
+      merged.bl.matavByMonth = mergeMatavByMonth(
+        (local && local.bl) ? local.bl.matavByMonth : null,
+        cloudSettings.bl ? cloudSettings.bl.matavByMonth : null);
+      merged.bl.approved = !!merged.bl.approved || hasPositiveMonth(merged.bl.matavByMonth);
+    }
+    return merged;
+  }
+
+  // Заменяет содержимое settings ПО ССЫЛКЕ (вызывающий держит ту же ссылку) и
+  // сохраняет. По ссылке — обязательно: pullIfNewer сразу после этого считает
+  // lastBackupHash по этому же объекту, и если бы он остался старым, устройство
+  // сочло бы локальное изменённым и отправило бы старые настройки обратно в облако.
+  function replaceSettingsInPlace(settings, next, store) {
+    Object.keys(settings).forEach(function (k) { delete settings[k]; });
+    Object.keys(next).forEach(function (k) { settings[k] = next[k]; });
+    store.saveSettings(settings);
+  }
+
   // Если в облаке более свежее поколение, а локально нет несохранённых правок —
-  // молча подтягивает облачные log/extras/returns/timesheets. Из НАСТРОЕК
-  // синхронизируем ТОЛЬКО «суммы от Матав» (bl.matavByMonth/matavAmount/approved) —
-  // это общий параметр, влияющий на расчёт на всех устройствах; токен и прочие
+  // молча подтягивает облачные log/extras/returns/timesheets и ОБЩИЕ настройки
+  // (всё, кроме device-local полей выше). Пул срабатывает только когда локальных
+  // правок нет, поэтому свои несохранённые настройки затереть не может; токен и прочие
   // личные настройки остаются локальными (как и при ручном восстановлении).
   // Возвращает {generation} при подтягивании, иначе null. Конфликт (локальные
   // правки + облако новее) НЕ перезаписывает — это подсветит backupIfChanged
@@ -515,10 +559,16 @@ window.MetapelSync = (function () {
       if (decideSync(state) !== 'pull') return null;
       // безопасно: локально несохранённого нет. replaceData заодно чистит syncQueue.
       store.replaceData({ log: cloud.log || {}, extras: cloud.extras || [], returns: cloud.returns || [], timesheets: cloud.timesheets || [] });
-      // подтянуть ОБЩИЕ «суммы от Матав» из облака (при pull облако всегда свежее).
+      // подтянуть ОБЩИЕ настройки из облака (при pull облако всегда свежее).
       // Применяем ДО пересчёта lastBackupHash, чтобы хэш отражал новое состояние
       // (иначе следующая синхронизация сочла бы локальное изменённым).
-      applySharedSettings(settings, store, sharedSettingsFromCloud(cloud.settings, true));
+      var nextSettings = mergeSettingsFromCloud(settings, cloud.settings);
+      if (nextSettings) {
+        replaceSettingsInPlace(settings, nextSettings, store);
+      } else {
+        // в облаке настроек нет (старый/битый бэкап) — довольствуемся суммами Матав
+        applySharedSettings(settings, store, sharedSettingsFromCloud(cloud.settings, true));
+      }
       store.setMeta('backupGeneration', state.cloudGen);
       store.setMeta('lastBackupHash', hashFn(buildBackupJson(settings, store, 0)));
       store.setMeta('lastSyncError', null);
@@ -536,6 +586,7 @@ window.MetapelSync = (function () {
     sharedSettingsFromCloud: sharedSettingsFromCloud,
     applySharedSettings: applySharedSettings, // нужна тестам и «Восстановить» в app.js
     mergeMatavByMonth: mergeMatavByMonth,
+    mergeSettingsFromCloud: mergeSettingsFromCloud, // нужна «Восстановить» в app.js
     localSupersedesCloud: localSupersedesCloud,
     fetchBackup: fetchBackup,
     buildBackupJson: buildBackupJson,

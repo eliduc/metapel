@@ -129,6 +129,27 @@ window.MetapelCalc = (function () {
     return 'unsigned';
   }
 
+  // Бланков в месяце может быть НЕСКОЛЬКО (с 08/2026 Матав присылает два:
+  // обычные часы + дополнительные от Claims Conference). Возвращает бланки
+  // месяца в стабильном порядке загрузки: id = 'ts-<миллисекунды>', поэтому
+  // строковая сортировка совпадает с хронологической.
+  function timesheetsOfMonth(list, month) {
+    return (list || []).filter(function (t) { return t && t.month === month; })
+      .sort(function (a, b) { return String(a.id) < String(b.id) ? -1 : 1; });
+  }
+
+  // Совокупный статус месяца — по САМОМУ ОТСТАЮЩЕМУ бланку: месяц «полностью
+  // подписан» или «отослан», только когда таковы ВСЕ его бланки.
+  function timesheetGroupStatus(mates) {
+    var rank = { unsigned: 0, caregiver: 1, family: 1, full: 2, sent: 3 };
+    var worst = null, worstRank = 99;
+    (mates || []).forEach(function (t) {
+      var st = timesheetStatus(t);
+      if (rank[st] < worstRank) { worstRank = rank[st]; worst = st; }
+    });
+    return worst || 'unsigned';
+  }
+
   // ---------- настройки по умолчанию ----------
 
   function defaultSettings() {
@@ -1034,6 +1055,8 @@ window.MetapelCalc = (function () {
     plural: plural,
     hashString: hashString,
     timesheetStatus: timesheetStatus,
+    timesheetsOfMonth: timesheetsOfMonth,
+    timesheetGroupStatus: timesheetGroupStatus,
     defaultSettings: defaultSettings,
     sanitizeSettings: sanitizeSettings,
     matavForMonth: matavForMonth,

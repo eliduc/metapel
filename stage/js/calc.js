@@ -99,6 +99,9 @@ window.MetapelCalc = (function () {
 
   function monthLabel(y, m) { return MONTHS_NOM[m - 1] + ' ' + y; }
 
+  // 'YYYY-MM' → «июль 2026» (ключи помесячных сумм от Матав)
+  function monthKeyLabel(key) { return monthLabel(+key.slice(0, 4), +key.slice(5)); }
+
   function plural(n, one, few, many) {
     var n10 = n % 10, n100 = n % 100;
     if (n10 === 1 && n100 !== 11) return one;
@@ -126,6 +129,27 @@ window.MetapelCalc = (function () {
     return 'unsigned';
   }
 
+  // Бланков в месяце может быть НЕСКОЛЬКО (с 08/2026 Матав присылает два:
+  // обычные часы + дополнительные от Claims Conference). Возвращает бланки
+  // месяца в стабильном порядке загрузки: id = 'ts-<миллисекунды>', поэтому
+  // строковая сортировка совпадает с хронологической.
+  function timesheetsOfMonth(list, month) {
+    return (list || []).filter(function (t) { return t && t.month === month; })
+      .sort(function (a, b) { return String(a.id) < String(b.id) ? -1 : 1; });
+  }
+
+  // Совокупный статус месяца — по САМОМУ ОТСТАЮЩЕМУ бланку: месяц «полностью
+  // подписан» или «отослан», только когда таковы ВСЕ его бланки.
+  function timesheetGroupStatus(mates) {
+    var rank = { unsigned: 0, caregiver: 1, family: 1, full: 2, sent: 3 };
+    var worst = null, worstRank = 99;
+    (mates || []).forEach(function (t) {
+      var st = timesheetStatus(t);
+      if (rank[st] < worstRank) { worstRank = rank[st]; worst = st; }
+    });
+    return worst || 'unsigned';
+  }
+
   // ---------- настройки по умолчанию ----------
 
   function defaultSettings() {
@@ -137,13 +161,17 @@ window.MetapelCalc = (function () {
       uiScale: 100, // размер текста, % (115 — крупный, 125 — очень крупный)
       passwordTtlMinutes: 10, // сколько минут не спрашивать пароль настроек повторно
       // Гмлат сиуд от Матав: Матав платит работнику ЧАСТЬ зарплаты за счёт пособия
-      // по уходу, остальное доплачивает семья. matavAmount — эта сумма (₪/мес),
-      // вводится вручную (меняется месяц к месяцу). approved=false / сумма 0 →
-      // зачёта нет, всю зарплату платит семья.
+      // по уходу, остальное доплачивает семья. Сумма приходит 9-го числа и КАЖДЫЙ
+      // МЕСЯЦ РАЗНАЯ, поэтому хранится ПОМЕСЯЧНО. Единое число применялось ко всем
+      // месяцам сразу и уже дважды исказило расчёт (правка задним числом пересчитала
+      // июнь; квартальный Битуах считался одной цифрой за три месяца).
+      // approved=false → зачёта нет, всю зарплату платит семья.
       bl: {
-        approved: false,    // Матав платит часть (отмечается на главном экране)
-        matavAmount: 0,     // сколько Матав платит работнику в месяц, ₪ (прямой ввод)
-        applyToSocial: true // уменьшать также взносы, пикадон и хавраа
+        approved: false,     // Матав платит часть (отмечается на главном экране)
+        matavAmount: 0,      // ЛЕГАСИ: одна сумма на все месяцы; только для старых
+                             // конфигов, где помесячных данных ещё нет
+        matavByMonth: {},    // ФАКТ: 'YYYY-MM' → сколько Матав заплатил за этот месяц, ₪
+        applyToSocial: true  // уменьшать также взносы, пикадон и хавраа
       },
       // параметры калькулятора окончания работы (раздел 6 памятки)
       final: {
@@ -232,28 +260,76 @@ window.MetapelCalc = (function () {
 
   // ---------- зачёт суммы от Матав (гмлат сиуд) ----------
 
-  // сколько Матав (гмлат сиуд) покрывает в месяц, ₪ (брутто, без потолков):
-  // ПРЯМАЯ сумма matavAmount, если задана (>0); иначе legacy «часы × ставка».
-  function blRawMonthly(bl) {
-    if (!bl) return 0;
-    // ТОЛЬКО прямая сумма от Матав. Старый расчёт «часы × ставка» убран: иначе
-    // approved=true при matavAmount=0 воскрешал бы устаревший зачёт (≈6266) и
-    // занижал доплату семьи — недоплата работнику. Нет суммы → зачёта нет.
-    return (typeof bl.matavAmount === 'number' && bl.matavAmount > 0) ? round2(bl.matavAmount) : 0;
+  var YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+  function ymKey(y, m) { return y + '-' + pad2(m); }
+
+  function isMonthMap(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+  // ключи 'YYYY-MM' с пригодными значениями (число ≥ 0). Карта приходит из облака
+  // как произвольный JSON, поэтому мусор отсеиваем везде, где на неё смотрим.
+  function monthKeys(byMonth) {
+    if (!isMonthMap(byMonth)) return [];
+    return Object.keys(byMonth).filter(function (k) {
+      var v = byMonth[k];
+      return YM_RE.test(k) && typeof v === 'number' && !isNaN(v) && v >= 0;
+    });
   }
 
-  // полный зачёт, когда отмечено, что Матав платит часть
-  function rawBlOffset(settings) {
-    var bl = settings.bl || {};
-    if (!bl.approved) return 0; // ещё не отмечено, что Матав платит — зачёта нет
-    return blRawMonthly(bl);
+  // «помесячных данных нет вовсе» — только это разрешает откат на легаси-число.
+  // Карта с ключами, но без валидных (строка вместо числа, ключ '2026-6', массив),
+  // пустой НЕ считается: помесячный режим уже включён, и подставлять единое число
+  // нельзя — иначе одна цифра снова расползётся по всем месяцам.
+  function monthMapEmpty(byMonth) {
+    if (byMonth === undefined || byMonth === null) return true;
+    if (!isMonthMap(byMonth)) return false; // массив/примитив — данные испорчены, не «пусто»
+    return Object.keys(byMonth).length === 0;
   }
 
-  // зачёт ЗАРПЛАТЫ: ограничен нетто-зарплатой — государство не субсидирует
+  /**
+   * Фактическая сумма от Матав (гмлат сиуд) за КОНКРЕТНЫЙ месяц, ₪.
+   * null — сумма за месяц НЕ введена. Вызывающий обязан проверить null отдельно
+   * и пометить начисление: молчаливый ноль завысил бы доплату семьи и занизил
+   * взносы, а это ровно та ошибка, ради которой суммы стали помесячными.
+   */
+  function matavForMonth(settings, y, m) {
+    var bl = settings && settings.bl;
+    if (!bl || !bl.approved) return 0; // учёт выключен — зачёта нет, прежнее поведение
+    var by = bl.matavByMonth;
+    if (isMonthMap(by)) {
+      var v = by[ymKey(y, m)];
+      if (typeof v === 'number' && !isNaN(v) && v >= 0) return round2(v);
+    }
+    // Помесячных данных нет вовсе → конфиг ещё в ЛЕГАСИ-режиме и обязан считаться
+    // в точности как до перехода на помесячные суммы: по единому числу, а если его
+    // нет — с зачётом 0 (полная зарплата). Возвращать здесь null нельзя: старый
+    // конфиг разом обнулился бы и платить стало бы нечем — это регрессия.
+    if (monthMapEmpty(by)) {
+      return (typeof bl.matavAmount === 'number' && bl.matavAmount > 0) ? round2(bl.matavAmount) : 0;
+    }
+    // Помесячные суммы уже есть → отсутствие нужного месяца означает «не введено»,
+    // а не повод подставить старое единое число: именно так одна цифра расползалась
+    // на все месяцы. Считать нечем — вызывающий обязан пометить начисление.
+    return null;
+  }
+
+  // Нужна ли сумма от Матав для ВЗНОСОВ (Битуах, пикадон, хавраа) и не введена ли она.
+  // Без applyToSocial зачёт этих начислений равен нулю по определению (blSocialOffset),
+  // сумма на них не влияет вообще — и обнулять начисление из-за невведённого месяца
+  // нельзя: владелец увидел бы нули по Битуах Леуми и пикадону и не заплатил их,
+  // а «починить» это можно было бы только вводом сумм, которые на цифры не влияют.
+  function blSocialMissing(settings, y, m) {
+    var bl = (settings && settings.bl) || {};
+    if (!bl.approved || !bl.applyToSocial) return false;
+    return matavForMonth(settings, y, m) === null;
+  }
+
+  // зачёт ЗАРПЛАТЫ за месяц: ограничен нетто-зарплатой — государство не субсидирует
   // больше нетто, чем есть, иначе доплата семьи ушла бы «в минус»/«платить
   // нечего». Базы взносов/пикадона капить по net НЕЛЬЗЯ (см. blSocialOffset).
-  function blMonthlyOffset(settings) {
-    var off = rawBlOffset(settings);
+  function blMonthlyOffset(settings, y, m) {
+    var off = matavForMonth(settings, y, m);
+    if (off === null) return 0; // сумма не введена: null проверяет вызывающий сам
     var net = (settings.types && settings.types.salary) ? settings.types.salary.net : off;
     return Math.min(off, net);
   }
@@ -262,34 +338,55 @@ window.MetapelCalc = (function () {
   // недостающие поля из дефолтов; одноразовая правка старых полей — в app.js migrateV6)
   function sanitizeSettings(settings) {
     if (settings && settings.bl) {
-      // сумма от Матав ≥ 0 (защита от мусора в бэкапе/старых настройках)
-      if (typeof settings.bl.matavAmount !== 'number' || isNaN(settings.bl.matavAmount) || settings.bl.matavAmount < 0) {
-        settings.bl.matavAmount = 0;
+      var bl = settings.bl;
+      // легаси-сумма ≥ 0 (защита от мусора в бэкапе/старых настройках)
+      if (typeof bl.matavAmount !== 'number' || isNaN(bl.matavAmount) || bl.matavAmount < 0) {
+        bl.matavAmount = 0;
       }
-      // approved привязан к сумме: без суммы от Матав учёт ВЫКЛЮЧЕН. Защита от
-      // рассинхрона галочки раздела настроек и от восстановления старого бэкапа,
-      // где approved=true мог стоять без суммы (иначе — недоплата работнику).
-      if (!(settings.bl.matavAmount > 0)) settings.bl.approved = false;
+      // Помесячные суммы: оставляем только 'YYYY-MM' → неотрицательное число.
+      // Ключи сортируем, чтобы JSON бэкапа не менялся от порядка ввода — иначе
+      // хэш копии «плавал» бы и устройства заливали её без реальных изменений.
+      var clean = {};
+      monthKeys(bl.matavByMonth).sort().forEach(function (k) {
+        clean[k] = round2(bl.matavByMonth[k]);
+      });
+      bl.matavByMonth = clean;
+      // approved привязан к суммам: пока не введено НИЧЕГО (ни легаси-сумма, ни
+      // хотя бы один месяц) учёт ВЫКЛЮЧЕН. Защита от рассинхрона галочки раздела
+      // настроек и от восстановления старого бэкапа, где approved=true мог стоять
+      // без суммы. ВАЖНО: введённый НОЛЬ — это данные («за этот месяц Матав не
+      // платил»), а не отсутствие суммы. Раньше проверялся «положительный» месяц,
+      // и единственный нулевой месяц гасил учёт целиком: остальные месяцы молча
+      // считались по полной базе (зарплата 8260 вместо 3300) без единой пометки.
+      if (!(bl.matavAmount > 0) && Object.keys(bl.matavByMonth).length === 0) bl.approved = false;
     }
     return settings;
   }
 
-  // доля зарплаты, которую семья платит из своих средств (0..1)
-  function blFamilyShare(settings) {
+  // доля зарплаты за месяц, которую семья платит из своих средств (0..1)
+  function blFamilyShare(settings, y, m) {
     var net = settings.types.salary.net;
     if (!net || net <= 0) return 1;
-    var off = blMonthlyOffset(settings);
+    var off = blMonthlyOffset(settings, y, m);
     if (off <= 0) return 1;
     if (off >= net) return 0;
     return (net - off) / net;
   }
 
-  // зачёт для СОЦВЫПЛАТ (взносы/пикадон): берём ПОЛНЫЙ зачёт без потолка по net —
-  // базы и так флорятся через Math.max(0, grossBase − зачёт). Кап по net занижал
-  // бы соцзачёт и завышал взносы, если нетто-зарплата ниже зачёта.
-  function blSocialOffset(settings) {
+  // зачёт за месяц для СОЦВЫПЛАТ (взносы/пикадон): берём ПОЛНЫЙ зачёт без потолка
+  // по net — базы и так флорятся через Math.max(0, grossBase − зачёт). Кап по net
+  // занижал бы соцзачёт и завышал взносы, если нетто-зарплата ниже зачёта.
+  function blSocialOffset(settings, y, m) {
     var bl = settings.bl || {};
-    return bl.approved && bl.applyToSocial ? rawBlOffset(settings) : 0;
+    if (!bl.approved || !bl.applyToSocial) return 0;
+    var off = matavForMonth(settings, y, m);
+    return off === null ? 0 : off;
+  }
+
+  // две строки, которыми начисление объясняет, что считать нечем
+  function matavMissingLines(y, m) {
+    return ['Сумма от Матав за ' + monthLabel(y, m) + ' не введена — посчитать нельзя',
+      'Введите сумму, присланную Матав, — карточка пересчитается'];
   }
 
   // ---------- генерация вхождений ----------
@@ -314,10 +411,13 @@ window.MetapelCalc = (function () {
     return mkDate(dy, dm, clampDay(dy, dm, dayOfMonth));
   }
 
-  function genSalary(t, start, end, out, blRaw) {
+  function genSalary(t, start, end, out, settings) {
     eachWorkedMonth(start, end, function (y, m, fromDay) {
       var due = nextMonthDue(y, m, t.dayOfMonth);
       if (due > end) return;
+      // сумма от Матав своя за каждый месяц: берём по месяцу НАЧИСЛЕНИЯ (y, m),
+      // а не по месяцу срока — платим 9-го числа следующего месяца
+      var blRaw = matavForMonth(settings, y, m);
       var dim = daysInMonth(y, m);
       var workedDays = dim - fromDay + 1;
       var sats = countSaturdays(y, m, fromDay);          // субботы в отработанной части месяца
@@ -329,6 +429,26 @@ window.MetapelCalc = (function () {
       var nonSatMonth = dim - satsMonth;                 // будних (несубботних) дней в месяце
       var nonSatWorked = workedDays - sats;              // из отработанных — несубботних
       var netPart = full ? t.net : round2(t.net * nonSatWorked / nonSatMonth);
+      if (blRaw === null) {
+        // Считать нечем: любое подставленное число либо занизит, либо завысит
+        // доплату семьи. Начисление всё равно показываем (иначе платёж просто
+        // исчезнет с экрана) — с нулём, пометкой и объяснением.
+        out.push({
+          id: 'salary-' + y + '-' + pad2(m),
+          type: 'salary',
+          month: ymKey(y, m),
+          blMissing: true,
+          missingMonths: [ymKey(y, m)], // как у взносов: интерфейс берёт месяцы отсюда
+          title: 'Зарплата за ' + monthLabel(y, m),
+          dueDate: due,
+          amount: 0,
+          breakdown: matavMissingLines(y, m),
+          // поля для пересчёта в диалоге оплаты обязаны остаться: карточка
+          // могла устареть, а диалог читает их без проверок
+          satCount: sats, satRate: t.shabbatRate, netPart: 0
+        });
+        return;
+      }
       // Сумма от Матав (гмлат сиуд) — ФАКТИЧЕСКАЯ выплата за месяц (вводится вручную
       // помесячно по присланной цифре, blRaw — без потолка по net), поэтому НЕ
       // прораторуется; в зачёт берём в пределах нетто-части, чтобы доплата семьи не
@@ -361,6 +481,8 @@ window.MetapelCalc = (function () {
       out.push({
         id: 'salary-' + y + '-' + pad2(m),
         type: 'salary',
+        month: ymKey(y, m), // на нём держится строка «Матав за …» в карточке
+        blMissing: false,
         title: 'Зарплата за ' + monthLabel(y, m),
         dueDate: due,
         amount: round2(familyNet + shabbat),
@@ -452,24 +574,56 @@ window.MetapelCalc = (function () {
       : null;
   }
 
+  // Обязанность платить взносы может возникать ПОЗЖЕ трудоустройства.
+  // t.fromMonth — номер месяца работы, с которого идут взносы (как у пикадона):
+  // 1 или поле отсутствует = с первого месяца, прежнее поведение.
+  // Возвращает 1-е число первого облагаемого месяца (или null, если ограничения
+  // нет). Именно 1-е число: первый облагаемый месяц считается ПОЛНЫМ, а не
+  // пропорционально дате выхода на работу.
+  function bituachSkipBefore(t, start) {
+    var n = (t && typeof t.fromMonth === 'number' && t.fromMonth > 1) ? t.fromMonth : 1;
+    if (n === 1) return null;
+    var d = parseISO(addMonthsISO(start, n - 1));
+    return mkDate(d.getFullYear(), d.getMonth() + 1, 1);
+  }
+
   // При переключении частоты месяц/квартал оплаченные записи другого
   // режима остаются в журнале — учитываем их, чтобы не требовать
   // повторной оплаты тех же месяцев.
-  function genBituach(t, start, end, out, paidLog, blOff) {
+  function genBituach(t, start, end, out, paidLog, settings) {
     paidLog = paidLog || {};
     if (t.frequency === 'quarterly') {
-      genBituachQuarterly(t, start, end, out, paidLog, blOff);
+      genBituachQuarterly(t, start, end, out, paidLog, settings);
       return;
     }
+    var minISO = bituachSkipBefore(t, start);
     eachWorkedMonth(start, end, function (y, m, fromDay) {
+      if (minISO && mkDate(y, m, 1) < minISO) return; // взносы ещё не начались
       var q = Math.floor((m - 1) / 3) + 1;
       if (paidLog['bituach-' + y + '-Q' + q]) return; // месяц покрыт оплаченным кварталом
       var due = nextMonthDue(y, m, t.dayOfMonth);
       if (due > end) return;
+      if (blSocialMissing(settings, y, m)) {
+        // База взноса = брутто минус сумма от Матав за ЭТОТ месяц. Без неё
+        // взнос посчитать нельзя; месячный режим — это ровно один месяц,
+        // поэтому «не включать месяц» = ноль с пометкой, а не пропуск карточки.
+        out.push({
+          id: 'bituach-' + y + '-' + pad2(m),
+          type: 'bituach',
+          blMissing: true,
+          missingMonths: [ymKey(y, m)],
+          title: 'Битуах Леуми за ' + monthLabel(y, m),
+          dueDate: due,
+          amount: 0,
+          breakdown: matavMissingLines(y, m)
+        });
+        return;
+      }
+      var blOff = blSocialOffset(settings, y, m);
       var dim = daysInMonth(y, m);
       var workedDays = dim - fromDay + 1;
       var full = bituachMonthly(t, blOff);
-      if (full <= 0) return; // часы БЛ покрывают всю базу
+      if (full <= 0) return; // зачёт покрывает всю базу
       var amount = workedDays === dim ? full : round2(full * workedDays / dim);
       var breakdown = [];
       var baseLine = bituachBaseLine(t, blOff);
@@ -482,6 +636,8 @@ window.MetapelCalc = (function () {
       out.push({
         id: 'bituach-' + y + '-' + pad2(m),
         type: 'bituach',
+        blMissing: false,
+        missingMonths: [],
         title: 'Битуах Леуми за ' + monthLabel(y, m),
         dueDate: due,
         amount: amount,
@@ -490,26 +646,36 @@ window.MetapelCalc = (function () {
     });
   }
 
-  function genBituachQuarterly(t, start, end, out, paidLog, blOff) {
+  function genBituachQuarterly(t, start, end, out, paidLog, settings) {
     paidLog = paidLog || {};
-    if (bituachMonthly(t, blOff) <= 0) return; // часы БЛ покрывают всю базу
-    var months = {}; // 'y-m' -> {y, m, amount}
+    // Квартал — это ТРИ месяца с РАЗНЫМИ суммами от Матав, поэтому и база, и
+    // ранний выход «зачёт покрыл всю базу» считаются помесячно внутри цикла.
+    var quarters = {}; // 'y-q' -> {y, q, items[], missing[]}
+    function quarter(y, q) {
+      var qk = y + '-' + q;
+      return (quarters[qk] = quarters[qk] || { y: y, q: q, items: [], missing: [] });
+    }
+    var minISO = bituachSkipBefore(t, start);
     eachWorkedMonth(start, end, function (y, m, fromDay) {
+      if (minISO && mkDate(y, m, 1) < minISO) return; // взносы ещё не начались
       if (paidLog['bituach-' + y + '-' + pad2(m)]) return; // месяц уже оплачен помесячно
+      var q = Math.floor((m - 1) / 3) + 1;
+      if (blSocialMissing(settings, y, m)) {
+        // Месяц без суммы в квартал НЕ включаем: посчитать его по нулю значило бы
+        // молча завысить взнос за квартал. Копим для пометки — не для тишины.
+        quarter(y, q).missing.push(ymKey(y, m));
+        return;
+      }
+      var blOff = blSocialOffset(settings, y, m);
+      var full = bituachMonthly(t, blOff);
+      if (full <= 0) return; // зачёт этого месяца покрыл всю базу
       var dim = daysInMonth(y, m);
       var workedDays = dim - fromDay + 1;
-      var full = bituachMonthly(t, blOff);
-      months[y + '-' + m] = {
+      quarter(y, q).items.push({
         y: y, m: m,
+        base: bituachBase(t, blOff),
         amount: workedDays === dim ? full : round2(full * workedDays / dim)
-      };
-    });
-    var quarters = {}; // 'y-q' -> {y, q, items[]}
-    Object.keys(months).forEach(function (k) {
-      var it = months[k];
-      var q = Math.floor((it.m - 1) / 3) + 1;
-      var qk = it.y + '-' + q;
-      (quarters[qk] = quarters[qk] || { y: it.y, q: q, items: [] }).items.push(it);
+      });
     });
     Object.keys(quarters).sort().forEach(function (qk) {
       var qu = quarters[qk];
@@ -520,18 +686,23 @@ window.MetapelCalc = (function () {
       if (due > end) return;
       var total = 0;
       var breakdown = [];
-      var baseLine = bituachBaseLine(t, blOff);
-      if (baseLine) breakdown.push(baseLine);
-      breakdown.push('Битуах Леуми: ' + fmtPct(t.ratePercent) + ' × ' +
-        fmtMoney(bituachBase(t, blOff)) + ' в месяц');
+      breakdown.push('База каждого месяца: ' + fmtMoney(t.grossBase) +
+        ' − сумма от Матав за этот месяц (взносы — только с доплаты семьи)');
       qu.items.forEach(function (it) {
         total = round2(total + it.amount);
-        breakdown.push(MONTHS_NOM[it.m - 1] + ': ' + fmtMoney(it.amount));
+        breakdown.push(MONTHS_NOM[it.m - 1] + ': ' + fmtPct(t.ratePercent) + ' × ' +
+          fmtMoney(it.base) + ' = ' + fmtMoney(it.amount));
       });
+      if (qu.missing.length) {
+        breakdown.push('Не введена сумма от Матав за: ' +
+          qu.missing.map(monthKeyLabel).join(', ') + ' — сумма квартала неполная');
+      }
       breakdown.push('Итого за квартал: ' + fmtMoney(total));
       out.push({
         id: 'bituach-' + qu.y + '-Q' + qu.q,
         type: 'bituach',
+        blMissing: qu.missing.length > 0,
+        missingMonths: qu.missing,
         title: 'Битуах Леуми за ' + qu.q + '-й квартал ' + qu.y,
         dueDate: due,
         amount: total,
@@ -540,18 +711,33 @@ window.MetapelCalc = (function () {
     });
   }
 
-  function genPikadon(t, start, end, out, blOff) {
+  function genPikadon(t, start, end, out, settings) {
     var pikStart = addMonthsISO(start, t.fromMonth - 1); // начало 7-го месяца работы
-    var base = Math.max(0, round2(t.grossBase - blOff));
-    if (base <= 0) return; // часы БЛ покрывают всю базу — отчисления у организации
-    var pension = round2(base * t.pensionPercent / 100);
-    var severance = round2(base * t.severancePercent / 100);
-    var amount = round2(pension + severance);
     eachWorkedMonth(start, end, function (y, m, fromDay) {
       var monthEnd = mkDate(y, m, daysInMonth(y, m));
       if (monthEnd < pikStart) return; // ещё не 7-й месяц
       var due = nextMonthDue(y, m, t.dayOfMonth);
       if (due > end) return;
+      if (blSocialMissing(settings, y, m)) {
+        out.push({
+          id: 'pikadon-' + y + '-' + pad2(m),
+          type: 'pikadon',
+          blMissing: true,
+          missingMonths: [ymKey(y, m)],
+          title: 'Пикадон за ' + monthLabel(y, m),
+          dueDate: due,
+          amount: 0,
+          breakdown: matavMissingLines(y, m)
+        });
+        return;
+      }
+      // база, проценты и ранний выход — помесячно: сумма от Матав своя у каждого месяца
+      var blOff = blSocialOffset(settings, y, m);
+      var base = Math.max(0, round2(t.grossBase - blOff));
+      if (base <= 0) return; // зачёт покрыл всю базу — отчисления у организации
+      var pension = round2(base * t.pensionPercent / 100);
+      var severance = round2(base * t.severancePercent / 100);
+      var amount = round2(pension + severance);
       var breakdown = [];
       if (blOff > 0) {
         breakdown.push('База: ' + fmtMoney(t.grossBase) + ' − зачёт часов БЛ ' +
@@ -565,6 +751,8 @@ window.MetapelCalc = (function () {
       out.push({
         id: 'pikadon-' + y + '-' + pad2(m),
         type: 'pikadon',
+        blMissing: false,
+        missingMonths: [],
         title: 'Пикадон за ' + monthLabel(y, m),
         dueDate: due,
         amount: amount,
@@ -580,11 +768,19 @@ window.MetapelCalc = (function () {
     return t.tiers[t.tiers.length - 1];
   }
 
-  function genHavraa(t, start, end, out, familyShare) {
-    if (familyShare <= 0) return; // полностью у организации по уходу
+  function genHavraa(t, start, end, out, settings) {
     for (var k = 1; ; k++) {
       var due = addYears(start, k);
       if (due > end) break;
+      // Хавраа годовая, а зачёт стал помесячным: долю семьи берём по месяцу
+      // годовщины. Если сумма за него не введена — доля ПОЛНАЯ (1): переплата
+      // работнику безопаснее недоплаты.
+      var dd = parseISO(due);
+      var dy = dd.getFullYear(), dm = dd.getMonth() + 1;
+      var blMissing = blSocialMissing(settings, dy, dm);
+      var familyShare = (!blMissing && settings.bl && settings.bl.approved && settings.bl.applyToSocial)
+        ? blFamilyShare(settings, dy, dm) : 1;
+      if (familyShare <= 0) continue; // полностью у организации по уходу
       var tier = havraaTier(t, k);
       var full = round2(tier.days * t.dayRate);
       var amount = round2(full * familyShare);
@@ -596,10 +792,16 @@ window.MetapelCalc = (function () {
         breakdown.push('Доля семьи в зарплате: ' + String(round2(familyShare * 100)).replace('.', ',') +
           '% → ' + fmtMoney(amount) + ' (остальное — организация по уходу)');
       }
+      if (blMissing) {
+        breakdown.push('Сумма от Матав за ' + monthLabel(dy, dm) +
+          ' не введена — доля семьи взята полной (100%)');
+      }
       breakdown.push('Выплачивается после каждого полного года работы (годовщина: ' + fmtDate(due) + ')');
       out.push({
         id: 'havraa-' + k,
         type: 'havraa',
+        blMissing: blMissing,
+        missingMonths: blMissing ? [ymKey(dy, dm)] : [],
         title: 'Дмей хавраа — за ' + k + '-й год работы',
         dueDate: due,
         amount: amount,
@@ -637,16 +839,15 @@ window.MetapelCalc = (function () {
     var start = settings.startDate;
     var t = settings.types;
     var out = [];
-    var blSoc = blSocialOffset(settings);
-    var famShare = (settings.bl && settings.bl.approved && settings.bl.applyToSocial)
-      ? blFamilyShare(settings) : 1;
+    // Зачёт от Матав НЕ вычисляем здесь одной цифрой: она применялась бы ко всем
+    // месяцам сразу. Генераторы берут сумму сами, по своему месяцу начисления.
     if (start && /^\d{4}-\d{2}-\d{2}$/.test(start)) {
-      if (t.salary.enabled) genSalary(t.salary, start, end, out, rawBlOffset(settings));
+      if (t.salary.enabled) genSalary(t.salary, start, end, out, settings);
       if (t.pocket.enabled) genPocket(t.pocket, start, end, out);
       if (t.insurance.enabled) genInsurance(t.insurance, start, end, out);
-      if (t.bituach.enabled) genBituach(t.bituach, start, end, out, paidLog, blSoc);
-      if (t.pikadon.enabled) genPikadon(t.pikadon, start, end, out, blSoc);
-      if (t.havraa.enabled) genHavraa(t.havraa, start, end, out, famShare);
+      if (t.bituach.enabled) genBituach(t.bituach, start, end, out, paidLog, settings);
+      if (t.pikadon.enabled) genPikadon(t.pikadon, start, end, out, settings);
+      if (t.havraa.enabled) genHavraa(t.havraa, start, end, out, settings);
       if (t.visa.enabled) {
         genYearly('visa', t.visa, start, end, out,
           function (due) { return 'Продление визы (' + parseISO(due).getFullYear() + ')'; },
@@ -706,16 +907,26 @@ window.MetapelCalc = (function () {
     }
     var lines = [];
     var warnings = [];
-    var blOff = blMonthlyOffset(settings);
-    var blSoc = blSocialOffset(settings);
-    var famShare = (settings.bl && settings.bl.approved && settings.bl.applyToSocial)
-      ? blFamilyShare(settings) : 1;
+    // Месяц окончания работы — ключ для помесячной суммы от Матав. Объявляем ДО
+    // зачётов: они теперь зависят от (y, m).
+    var e = parseISO(endISO);
+    var y = e.getFullYear(), m = e.getMonth() + 1, endDay = e.getDate();
+    var blMissing = matavForMonth(settings, y, m) === null;
+    if (blMissing) {
+      warnings.push('Сумма от Матав за ' + monthLabel(y, m) +
+        ' не введена — расчёт ориентировочный, база взята полной.');
+    }
+    var blOff = blMonthlyOffset(settings, y, m);
+    var blSoc = blSocialOffset(settings, y, m);
+    var famShare = (!blMissing && settings.bl && settings.bl.approved && settings.bl.applyToSocial)
+      ? blFamilyShare(settings, y, m) : 1;
+    // ДОПУЩЕНИЕ: выходное пособие и отпуск считаются ОДНОЙ базой, умноженной на
+    // число месяцев стажа. Суммы от Матав помесячные, но менять формулу выходного
+    // пособия здесь нельзя, поэтому базу берём по месяцу окончания работы.
     var base = Math.max(0, round2(t.pikadon.grossBase - blSoc));
     var months = monthsBetween(start, endISO);
 
     // 1. зарплата за последний неполный месяц (+ шабат по календарю)
-    var e = parseISO(endISO);
-    var y = e.getFullYear(), m = e.getMonth() + 1, endDay = e.getDate();
     var dim = daysInMonth(y, m);
     var s0 = parseISO(start);
     var fromDay = (y === s0.getFullYear() && m === s0.getMonth() + 1) ? s0.getDate() : 1;
@@ -840,12 +1051,18 @@ window.MetapelCalc = (function () {
     fmtDate: fmtDate,
     fmtDateShort: fmtDateShort,
     monthLabel: monthLabel,
+    monthKeyLabel: monthKeyLabel,
     plural: plural,
     hashString: hashString,
     timesheetStatus: timesheetStatus,
+    timesheetsOfMonth: timesheetsOfMonth,
+    timesheetGroupStatus: timesheetGroupStatus,
     defaultSettings: defaultSettings,
     sanitizeSettings: sanitizeSettings,
+    matavForMonth: matavForMonth,
+    blSocialMissing: blSocialMissing,
     blMonthlyOffset: blMonthlyOffset,
+    blSocialOffset: blSocialOffset,
     blFamilyShare: blFamilyShare,
     monthsBetween: monthsBetween,
     calcFinalSettlement: calcFinalSettlement,

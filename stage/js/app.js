@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.5 от 02.08.2026 (Синхронизация: авто-подтягивание раз в 15 минут + заметный баннер при застревании)';
+  var APP_VERSION = '6.9 от 16.08.2026 (Два бланка месяца: одна подпись на оба, одно письмо с двумя PDF)';
 
   // ---------- «сегодня» ----------
 
@@ -258,7 +258,7 @@
     var content = $('#content');
     content.innerHTML = '';
     syncAlertCard(content);
-    if (activeTab === 'due') { blStatusCard(content); renderDue(occ, content); }
+    if (activeTab === 'due') { blStatusCard(content, occ); renderDue(occ, content); }
     else if (activeTab === 'upcoming') renderUpcoming(occ, content);
     else if (activeTab === 'history') renderHistory(content);
     else if (activeTab === 'advance') renderAdvance(content);
@@ -341,6 +341,11 @@
     head.appendChild(el('div', 'card-amount', C.fmtMoney(o.amount)));
     div.appendChild(head);
 
+    // сумма от Матав за месяц этого начисления: без неё зарплату посчитать
+    // нельзя, а взносы/пикадон считаются по неполному набору месяцев
+    if (o.type === 'salary' && occMonth(o)) div.appendChild(matavRow(o));
+    else if (o.blMissing) div.appendChild(matavMissingRow(o));
+
     // большая кнопка-раскрывашка вместо мелкого <details>
     var btnB = el('button', 'btn-breakdown', '📖 Как посчитана сумма ▾');
     var body = el('ul', 'breakdown-body');
@@ -352,7 +357,7 @@
     div.appendChild(btnB);
     div.appendChild(body);
 
-    if (withPayBtn) {
+    if (withPayBtn && !payBlocked(o)) {
       var actions = el('div', 'card-actions');
       var btn = el('button', 'btn btn-pay', '✓ Я заплатил');
       btn.addEventListener('click', function () { openPayModal(o); });
@@ -364,6 +369,29 @@
 
   function sumAmounts(list) {
     return list.reduce(function (s, o) { return s + o.amount; }, 0);
+  }
+
+  // Начисление, посчитанное БЕЗ суммы от Матав, платить нельзя. Отметка об оплате
+  // ВЕЧНАЯ: getStatus по тому же id всегда вернёт 'paid', а отдельного «добора»
+  // разницы в приложении нет. Поэтому оплаченный неполный квартальный Битуах
+  // закрывал бы квартал навсегда — недоплата (напр. 53,45 ₪ вместо 160,35 ₪)
+  // исчезала бы со всех экранов, а это дыра в страховом стаже работника.
+  // У зарплаты и помесячных взносов сумма и вовсе нулевая, у хавраа — завышенная.
+  // Сначала ввести суммы месяцев, потом платить.
+  function payBlocked(o) {
+    return !!o.blMissing;
+  }
+
+  // Итог складывается из amount, а начисление без суммы от Матав посчитано неверно:
+  // зарплата и помесячные взносы — нулём, квартальный Битуах — по неполному набору
+  // месяцев, хавраа — наоборот по ПОЛНОЙ доле семьи (то есть завышена). Молча
+  // принятый итог владелец счёл бы верным — пишем, сколько начислений в нём неточны.
+  function missingNote(list) {
+    var n = list.filter(function (o) { return o.blMissing; }).length;
+    if (!n) return '';
+    return '<br>⚠ Итог неточный: ' + n + ' ' +
+      C.plural(n, 'начисление посчитано', 'начисления посчитаны', 'начислений посчитаны') +
+      ' без суммы от Матав — введите её, и суммы пересчитаются.';
   }
 
   function renderDue(occ, content) {
@@ -380,86 +408,243 @@
       '⚠️ Нужно заплатить: ' + C.fmtMoney(sumAmounts(due)) +
       '<div class="banner-sub">' + due.length + ' ' +
       C.plural(due.length, 'платёж', 'платежа', 'платежей') +
-      ' — список ниже. После каждой оплаты нажмите зелёную кнопку.</div>'));
+      ' — список ниже. После каждой оплаты нажмите зелёную кнопку.' +
+      missingNote(due) + '</div>'));
     due.forEach(function (o) { content.appendChild(card(o, true)); });
   }
 
-  // ---------- часы Битуах Леуми: статус на главном экране ----------
+  // ---------- сумма от Матав (гмлат сиуд): помесячно ----------
 
-  // прямая сумма от Матав (₪/мес): ≥ 0, округление до копеек
+  // прямая сумма от Матав (₪ за месяц): ≥ 0, округление до копеек
   function clampAmount(v) {
     if (isNaN(v) || v < 0) return 0;
     return C.round2(v);
   }
 
-  function blStatusCard(content) {
-    var bl = settings.bl || {};
-    if (bl.approved) {
-      var cardA = el('div', 'bl-card bl-approved',
-        '✅ <b>Матав (гмлат сиуд) платит: ' + C.fmtMoney(bl.matavAmount || 0) + ' в месяц</b>' +
-        '<div class="bl-sub">Эта сумма вычтена из зарплаты — суммы ниже это доплата семьи.</div>');
-      var btnA = el('button', 'btn btn-light', '✎ Изменить сумму от Матав');
-      btnA.addEventListener('click', openHoursModal);
-      cardA.appendChild(btnA);
-      content.appendChild(cardA);
-    } else {
-      var cardP = el('div', 'bl-card bl-pending',
-        '<div class="bl-sub">Введите сумму оплаты от Матав (гмлат сиуд) за последний месяц.</div>');
-      var btnP = el('button', 'btn btn-light', '✓ Указать сумму от Матав');
-      btnP.addEventListener('click', openHoursModal);
-      cardP.appendChild(btnP);
-      content.appendChild(cardP);
-    }
+  var YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/; // ключ месяца в settings.bl.matavByMonth
+
+  function ymParse(key) {
+    var p = /^(\d{4})-(\d{2})$/.exec(key || '');
+    return (p && YM_RE.test(key)) ? { y: +p[1], m: +p[2] } : null;
   }
 
-  function openHoursModal() {
-    var bl = settings.bl || {};
-    $('#hours-input').value = bl.matavAmount || 0;
-    $('#hours-revert').style.display = bl.approved ? '' : 'none';
+  function ymLabel(key) {
+    var p = ymParse(key);
+    return p ? C.monthLabel(p.y, p.m) : String(key);
+  }
+
+  // Месяц НАЧИСЛЕНИЯ, а не календарный: зарплата за июнь платится 9 июля.
+  // Берём поле occurrence, а если его нет — из id вида 'salary-2026-06'
+  // (у квартального Битуаха id другой — 'bituach-2026-Q3' — и месяца тут нет).
+  function occMonth(o) {
+    if (o.month && YM_RE.test(o.month)) return o.month;
+    var p = /-(\d{4})-(0[1-9]|1[0-2])$/.exec(o.id || '');
+    return p ? p[1] + '-' + p[2] : null;
+  }
+
+  function matavAmountFor(ym) {
+    var p = ymParse(ym);
+    return p ? C.matavForMonth(settings, p.y, p.m) : null;
+  }
+
+  // Учитывать суммы от Матав можно, пока есть хоть одна ВВЕДЁННАЯ: старая единая
+  // (matavAmount) или любая помесячная — включая нулевую («за этот месяц Матав не
+  // платил» — это данные, а не пустота). Условие то же, что в calc.sanitizeSettings:
+  // разойдутся — сохранение настроек будет гасить учёт, который sanitize оставил.
+  // Если снять approved, зачёт обнулится СРАЗУ ВО ВСЕХ месяцах (правило 1
+  // matavForMonth), причём молча — тихое завышение доплаты семьи.
+  function blHasAmount(bl) {
+    if (!bl) return false;
+    if (typeof bl.matavAmount === 'number' && bl.matavAmount > 0) return true;
+    var by = bl.matavByMonth;
+    if (!by || typeof by !== 'object') return false;
+    return Object.keys(by).some(function (k) {
+      return YM_RE.test(k) && typeof by[k] === 'number' && !isNaN(by[k]) && by[k] >= 0;
+    });
+  }
+
+  // Порядок ключей объекта попадает в JSON бэкапа, а по его хэшу синхронизация
+  // решает «изменилось / не изменилось». Держим месяцы отсортированными, иначе
+  // два устройства с одинаковыми суммами дают разный хэш и вечные перезаливки.
+  function sortedMonths(by) {
+    var out = {};
+    Object.keys(by).sort().forEach(function (k) { out[k] = by[k]; });
+    return out;
+  }
+
+  // месяц, за который сейчас платится зарплата (для верхней карточки):
+  // из ближайшего неоплаченного начисления, а не из календаря
+  function currentSalaryMonth(occ) {
+    var sal = occ.filter(function (o) { return o.type === 'salary' && o.status !== 'paid'; });
+    var due = sal.filter(function (o) { return o.status === 'due' || o.status === 'overdue'; });
+    var pick = (due.length ? due : sal)[0];
+    return pick ? occMonth(pick) : null;
+  }
+
+  // кнопки в блоке про Матав — отдельной строкой (иначе прилипают к тексту)
+  function blButtons(box, buttons) {
+    var actions = el('div', 'card-actions');
+    buttons.forEach(function (b) { actions.appendChild(b); });
+    box.appendChild(actions);
+    return box;
+  }
+
+  function matavButton(ym, label, cls) {
+    var btn = el('button', 'btn ' + cls, label);
+    btn.type = 'button';
+    btn.addEventListener('click', function () { openMatavModal(ym); });
+    return btn;
+  }
+
+  // Учёт выключен (bl.approved = false) — это НЕ «сумма не введена»: расчёт идёт
+  // без зачёта, как будто Матав не платит вовсе (matavForMonth возвращает 0).
+  // Показываем это отдельным состоянием, иначе «0 ₪» выглядит как введённая сумма.
+  function blOff() { return !(settings.bl && settings.bl.approved); }
+
+  function blStatusCard(content, occ) {
+    var ym = currentSalaryMonth(occ);
+    if (!ym) return; // не за какой месяц вводить — карточку не показываем
+    // Если карточка зарплаты за этот же месяц и так в списке ниже, она уже
+    // показывает и сумму от Матав, и кнопку ввода (matavRow) — второй такой же
+    // блок сверху только удлиняет экран вдвое.
+    var inList = occ.some(function (o) {
+      return o.type === 'salary' && occMonth(o) === ym &&
+        (o.status === 'due' || o.status === 'overdue');
+    });
+    if (inList) return;
+    var amt = matavAmountFor(ym);
+    var box;
+    if (blOff()) {
+      box = el('div', 'bl-card bl-pending',
+        '<div class="bl-sub">Учёт суммы от Матав (гмлат сиуд) выключен — суммы ниже ' +
+        'посчитаны так, будто Матав не платит. Введите присланную сумму, и она будет вычтена.</div>');
+      blButtons(box, [matavButton(ym, '✓ Указать сумму от Матав', 'btn-light')]);
+    } else if (amt == null) {
+      box = el('div', 'bl-card bl-pending',
+        '⚠ <b>Сумма от Матав за ' + esc(ymLabel(ym)) + ' не введена</b>' +
+        '<div class="bl-sub">Матав присылает её 9-го числа, и каждый месяц она разная. ' +
+        'Пока не введёте — зарплату за этот месяц посчитать нельзя.</div>');
+      blButtons(box, [matavButton(ym, '✓ Ввести сумму от Матав', 'btn-pay')]);
+    } else {
+      box = el('div', 'bl-card bl-approved',
+        '✅ <b>Матав за ' + esc(ymLabel(ym)) + ': ' + C.fmtMoney(amt) + '</b>' +
+        '<div class="bl-sub">Эта сумма вычтена из зарплаты — суммы ниже это доплата семьи.</div>');
+      blButtons(box, [matavButton(ym, '✎ Изменить сумму от Матав', 'btn-light')]);
+    }
+    content.appendChild(box);
+  }
+
+  // строка про Матав в карточке зарплаты: сумма месяца либо призыв её ввести
+  function matavRow(o) {
+    var ym = occMonth(o);
+    var amt = matavAmountFor(ym);
+    var box;
+    if (blOff()) {
+      box = el('div', 'bl-card bl-pending',
+        '<div class="bl-sub">Учёт суммы от Матав выключен — зарплата посчитана полностью, ' +
+        'без вычета гмлат сиуд.</div>');
+      blButtons(box, [matavButton(ym, '✓ Указать сумму от Матав за ' + esc(ymLabel(ym)), 'btn-light')]);
+    } else if (amt == null) {
+      box = el('div', 'bl-card bl-pending',
+        '⚠ <b>Сумма от Матав за ' + esc(ymLabel(ym)) + ' не введена</b>' +
+        '<div class="bl-sub">Введите сумму, присланную Матав, — карточка пересчитается.</div>');
+      blButtons(box, [matavButton(ym, '✓ Ввести сумму от Матав', 'btn-pay')]);
+    } else {
+      box = el('div', 'bl-card bl-approved',
+        '🤝 <b>Матав за ' + esc(ymLabel(ym)) + ': ' + C.fmtMoney(amt) + '</b>');
+      blButtons(box, [matavButton(ym, '✎ Изменить сумму от Матав', 'btn-light')]);
+    }
+    return box;
+  }
+
+  // Взносы и пикадон считаются помесячно: месяц без суммы от Матав в начисление
+  // не вошёл. Даём ввести его прямо отсюда — карточка зарплаты за тот месяц
+  // могла быть уже оплачена и с экрана исчезнуть. Про «занижено» здесь не пишем:
+  // у хавраа без суммы доля семьи берётся полной, то есть начисление ЗАВЫШЕНО.
+  function matavMissingRow(o) {
+    var months = (o.missingMonths || []).filter(function (k) { return YM_RE.test(k); });
+    var box = el('div', 'bl-card bl-pending',
+      '⚠ <b>Сумма неточная: нет данных от Матав</b>' +
+      '<div class="bl-sub">Не введена сумма за: ' +
+      (months.length ? esc(months.map(ymLabel).join(', ')) : 'часть месяцев') +
+      '. Пока их нет, платить это начисление нельзя — сумма посчитана неверно.</div>');
+    return blButtons(box, months.map(function (k) {
+      return matavButton(k, '✎ Ввести за ' + esc(ymLabel(k)), 'btn-light');
+    }));
+  }
+
+  var matavMonth = null; // месяц ('YYYY-MM'), который правится в окне #modal-hours
+
+  function openMatavModal(ym) {
+    if (!YM_RE.test(ym || '')) { appAlert('Не удалось определить месяц.'); return; }
+    matavMonth = ym;
+    var cur = matavAmountFor(ym);
+    var box = $('#modal-hours');
+    box.querySelector('h2').textContent = '🤝 Сумма от Матав за ' + ymLabel(ym);
+    box.querySelector('.muted').textContent = 'Матав присылает сумму 9-го числа, и каждый ' +
+      'месяц она разная. Введите ту, что пришла за ' + ymLabel(ym) + ', — остальное доплачивает семья.';
+    box.querySelector('label[for="hours-input"]').textContent = 'Матав заплатил, ₪';
+    var inp = $('#hours-input');
+    inp.step = '0.01'; // суммы копеечные (напр. 4959.03) — шаг разметки в 100 ₪ их бы испортил
+    // пусто, а не 0: «сумма не введена» и «введён ноль» — разные состояния
+    inp.value = (cur == null ? '' : cur);
+    // «Матав вообще не платит» в помесячной модели = ввод нуля за месяц (кнопка
+    // глобального отключения убрана: отсюда она обнулила бы и все прочие месяцы;
+    // выключатель учёта — галочка раздела «Гмлат сиуд» в настройках)
     updateHoursEffect();
-    $('#modal-hours').classList.add('open');
+    box.classList.add('open');
     updateScrollLock();
   }
 
   function stepHours(delta) {
     var v = parseFloat($('#hours-input').value);
     if (isNaN(v)) v = 0;
-    v = clampAmount(v + delta * 100); // шаг ±100 ₪
+    v = clampAmount(v + delta * 100); // шаг ±100 ₪, копейки правятся вводом
     $('#hours-input').value = v;
     updateHoursEffect();
   }
 
   function updateHoursEffect() {
-    var amt = clampAmount(parseFloat($('#hours-input').value));
+    if (!matavMonth) return; // окно закрыто — подсказке не о каком месяце говорить
+    var raw = parseFloat($('#hours-input').value);
+    if (isNaN(raw)) {
+      $('#hours-effect').textContent = 'Введите сумму, присланную Матав за ' +
+        ymLabel(matavMonth) + ', — карточка пересчитается.';
+      return;
+    }
+    var amt = clampAmount(raw);
     var net = (settings.types && settings.types.salary) ? settings.types.salary.net : amt;
     var doplata = Math.max(0, C.round2(net - Math.min(amt, net)));
-    $('#hours-effect').textContent = 'Матав платит ≈ ' + C.fmtMoney(amt) +
-      ' в месяц → ваша доплата зарплаты ≈ ' + C.fmtMoney(doplata) + ' (плюс субботы).';
+    $('#hours-effect').textContent = 'Матав за ' + ymLabel(matavMonth) + ': ' + C.fmtMoney(amt) +
+      ' → ваша доплата зарплаты ≈ ' + C.fmtMoney(doplata) + ' (плюс субботы).';
   }
 
-  function saveHours() {
+  function saveMatavMonth() {
     if (!actionGuard()) return;
+    if (!YM_RE.test(matavMonth || '')) { appAlert('Не выбран месяц.'); return; }
     var raw = parseFloat($('#hours-input').value);
-    if (isNaN(raw) || raw < 0) { appAlert('Укажите сумму от Матав (₪ в месяц). 0 — если Матав не платит.'); return; }
+    if (isNaN(raw) || raw < 0) {
+      appAlert('Укажите сумму, присланную Матав (₪). 0 — если за этот месяц Матав не платил.');
+      return;
+    }
     var amt = clampAmount(raw);
-    settings.bl.matavAmount = amt;
-    settings.bl.approved = amt > 0; // 0 — учёт суммы от Матав выключается
+    var saved = matavMonth;
+    settings.bl = settings.bl || {};
+    var src = (settings.bl.matavByMonth && typeof settings.bl.matavByMonth === 'object')
+      ? settings.bl.matavByMonth : {};
+    var by = {};
+    Object.keys(src).forEach(function (k) { by[k] = src[k]; });
+    by[saved] = amt;
+    settings.bl.matavByMonth = sortedMonths(by);
+    // Ввод месяца (в том числе нулевого) означает «суммы от Матав ведём»: без
+    // approved зачёт не применяется НИГДЕ (правило 1 matavForMonth), и остальные
+    // месяцы посчитались бы по полной базе молча, без пометки «не введено».
+    settings.bl.approved = true;
     S.saveSettings(settings);
     settings = S.loadSettings();
-    closeModals();
+    closeModals(); // сбрасывает matavMonth — месяц запомнили выше
     render();
-    showToast(amt > 0 ? '✓ Сумма от Матав сохранена' : '✓ Учёт суммы от Матав отключён');
-    runSync();
-  }
-
-  function revertHours() {
-    if (!actionGuard()) return;
-    settings.bl.approved = false;
-    S.saveSettings(settings);
-    settings = S.loadSettings();
-    closeModals();
-    render();
-    showToast('✓ Отмечено: часы не утверждены');
+    showToast('✓ Матав за ' + ymLabel(saved) + ': сумма сохранена');
     runSync();
   }
 
@@ -540,41 +725,108 @@
       content.appendChild(el('div', 'empty', 'Табелей пока нет. Загрузите присланный Матав PDF.'));
       return;
     }
+    // Карточка = МЕСЯЦ. С 08/2026 Матав присылает ДВА однотипных бланка
+    // (обычные часы + дополнительные от Claims Conference) — они объединяются
+    // в одну карточку: каждый подписант расписывается ОДИН раз (подпись встаёт
+    // в оба бланка), отправка — одним письмом с двумя PDF.
+    var months = [], seen = {};
     timesheets.slice().sort(function (a, b) { return a.month < b.month ? 1 : -1; }).forEach(function (t) {
-      var st = C.timesheetStatus(t);
-      var card = el('div', 'card paid-card');
-      var head = el('div', 'card-head');
-      var left = el('div', 'card-left');
-      left.appendChild(el('div', 'card-title', '📋 Табель ' + esc(tsMonthSlash(t.month))));
-      left.appendChild(el('div', 'card-due', 'загружен ' + C.fmtDate(t.uploadedDate)));
-      head.appendChild(left);
-      head.appendChild(el('div', 'ts-chip ts-' + st, TS_LABELS[st]));
-      card.appendChild(head);
-
-      var acts = el('div', 'ts-actions');
-      if (st !== 'sent') {
-        if (!t.caregiverSigned) {
-          acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSign(t.id, 'caregiver'); }));
-        }
-        if (!t.familySigned) {
-          acts.appendChild(tsBtn('✍ Подпись Григория (член семьи)', 'btn-give-gift', function () { tsSign(t.id, 'family'); }));
-        }
-      }
-      if (t.caregiverSigned || t.familySigned) {
-        acts.appendChild(tsBtn('⬇ Скачать подписанный PDF', 'btn-light', function () { tsDownload(t.id); }));
-      }
-      if (st === 'full') {
-        acts.appendChild(tsBtn('📧 Отослать в Матав', 'btn-pay', function () { tsSend(t.id); }));
-        acts.appendChild(tsBtn('✓ Отметить «Отослано»', 'btn-light', function () { tsMarkSent(t.id); }));
-      }
-      if (st === 'sent') {
-        acts.appendChild(el('div', 'card-due', 'отослано ' + C.fmtDate(t.sentDate)));
-        acts.appendChild(tsBtn('📧 Отослать повторно', 'btn-pay', function () { tsSend(t.id); }));
-      }
-      acts.appendChild(tsBtn('🗑 Удалить табель', 'btn-undo', function () { tsDelete(t.id); }));
-      card.appendChild(acts);
-      content.appendChild(card);
+      if (!seen[t.month]) { seen[t.month] = true; months.push(t.month); }
     });
+    months.forEach(function (month) {
+      var mates = C.timesheetsOfMonth(timesheets, month);
+      content.appendChild(mates.length > 1 ? tsGroupCard(month, mates) : tsSingleCard(mates[0]));
+    });
+  }
+
+  // одиночный бланк месяца — карточка прежнего вида (поведение не менялось)
+  function tsSingleCard(t) {
+    var st = C.timesheetStatus(t);
+    var card = el('div', 'card paid-card');
+    var head = el('div', 'card-head');
+    var left = el('div', 'card-left');
+    left.appendChild(el('div', 'card-title', '📋 Табель ' + esc(tsMonthSlash(t.month))));
+    left.appendChild(el('div', 'card-due', 'загружен ' + C.fmtDate(t.uploadedDate)));
+    head.appendChild(left);
+    head.appendChild(el('div', 'ts-chip ts-' + st, TS_LABELS[st]));
+    card.appendChild(head);
+
+    var acts = el('div', 'ts-actions');
+    if (st !== 'sent') {
+      if (!t.caregiverSigned) {
+        acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSign(t.id, 'caregiver'); }));
+      }
+      if (!t.familySigned) {
+        acts.appendChild(tsBtn('✍ Подпись Григория (член семьи)', 'btn-give-gift', function () { tsSign(t.id, 'family'); }));
+      }
+    }
+    if (t.caregiverSigned || t.familySigned) {
+      acts.appendChild(tsBtn('⬇ Скачать подписанный PDF', 'btn-light', function () { tsDownload(t.id); }));
+    }
+    if (st === 'full') {
+      acts.appendChild(tsBtn('📧 Отослать в Матав', 'btn-pay', function () { tsSend(t.id); }));
+      acts.appendChild(tsBtn('✓ Отметить «Отослано»', 'btn-light', function () { tsMarkSent(t.id); }));
+    }
+    if (st === 'sent') {
+      acts.appendChild(el('div', 'card-due', 'отослано ' + C.fmtDate(t.sentDate)));
+      acts.appendChild(tsBtn('📧 Отослать повторно', 'btn-pay', function () { tsSend(t.id); }));
+    }
+    acts.appendChild(tsBtn('🗑 Удалить табель', 'btn-undo', function () { tsDelete(t.id); }));
+    card.appendChild(acts);
+    return card;
+  }
+
+  // месяц с НЕСКОЛЬКИМИ бланками: одна карточка, одна пара кнопок подписания
+  // (каждая подпись рисуется один раз и штампуется во ВСЕ неподписанные бланки),
+  // отправка — когда полностью подписаны ВСЕ бланки, одним письмом.
+  function tsGroupCard(month, mates) {
+    var st = C.timesheetGroupStatus(mates);
+    var card = el('div', 'card paid-card');
+    var head = el('div', 'card-head');
+    var left = el('div', 'card-left');
+    left.appendChild(el('div', 'card-title', '📋 Табель ' + esc(tsMonthSlash(month)) + ' · ' +
+      mates.length + ' бланка'));
+    mates.forEach(function (t, i) {
+      left.appendChild(el('div', 'card-due', 'бланк ' + (i + 1) + ': ' +
+        esc(String(t.fileName || t.id)) + ' — загружен ' + C.fmtDate(t.uploadedDate)));
+    });
+    head.appendChild(left);
+    head.appendChild(el('div', 'ts-chip ts-' + st, TS_LABELS[st]));
+    card.appendChild(head);
+
+    var allSent = mates.every(function (t) { return C.timesheetStatus(t) === 'sent'; });
+    var allFull = mates.every(function (t) { var s = C.timesheetStatus(t); return s === 'full' || s === 'sent'; });
+    var acts = el('div', 'ts-actions');
+    if (!allSent) {
+      if (mates.some(function (t) { return !t.caregiverSigned; })) {
+        acts.appendChild(tsBtn('✍ Подписать Метапелет (один раз — в оба бланка)', 'btn-pay',
+          function () { tsSignGroup(month, 'caregiver'); }));
+      }
+      if (mates.some(function (t) { return !t.familySigned; })) {
+        acts.appendChild(tsBtn('✍ Подпись Григория (один раз — в оба бланка)', 'btn-give-gift',
+          function () { tsSignGroup(month, 'family'); }));
+      }
+    }
+    mates.forEach(function (t, i) {
+      if (t.caregiverSigned || t.familySigned) {
+        acts.appendChild(tsBtn('⬇ Скачать бланк ' + (i + 1) + ' (подписанный)', 'btn-light',
+          function () { tsDownload(t.id); }));
+      }
+    });
+    if (allFull && !allSent) {
+      acts.appendChild(tsBtn('📧 Отослать в Матав (оба бланка одним письмом)', 'btn-pay',
+        function () { tsSendGroup(month); }));
+      acts.appendChild(tsBtn('✓ Отметить «Отослано»', 'btn-light', function () { tsMarkSentGroup(month); }));
+    }
+    if (allSent) {
+      acts.appendChild(el('div', 'card-due', 'отослано ' + C.fmtDate(mates[0].sentDate)));
+      acts.appendChild(tsBtn('📧 Отослать повторно (оба)', 'btn-pay', function () { tsSendGroup(month); }));
+    }
+    mates.forEach(function (t, i) {
+      acts.appendChild(tsBtn('🗑 Удалить бланк ' + (i + 1), 'btn-undo', function () { tsDelete(t.id); }));
+    });
+    card.appendChild(acts);
+    return card;
   }
 
   function tsDelete(id) {
@@ -652,8 +904,14 @@
   }
 
   var tsPreviewSave = null;
-  function tsShowPreview(signedU8, onSave) {
+  function tsShowPreview(signedU8, onSave, opts) {
+    opts = opts || {};
     tsPreviewSave = onSave;
+    // тексты ставим КАЖДЫЙ раз (иначе после группового предпросмотра одиночный
+    // унаследовал бы «Сохранить оба бланка»)
+    $('#ts-preview-save').textContent = opts.btnText || '✓ Сохранить подписанный табель';
+    var hint = document.querySelector('#modal-ts-preview .hint');
+    if (hint) hint.textContent = opts.hintText || 'Проверьте, что подписи встали по местам. Затем сохраните.';
     $('#modal-ts-preview').classList.add('open');
     updateScrollLock();
     window.MetapelTimesheet.render(signedU8, $('#ts-preview-canvas'), 1.5)
@@ -675,6 +933,80 @@
       showToast('✓ Подпись сохранена');
       runSync();
     }).catch(function (e) { appAlert('Не удалось сохранить подписанный табель: ' + (e && e.message || e)); });
+  }
+
+  // ГРУППОВОЕ подписание: подпись рисуется ОДИН раз и штампуется во ВСЕ ещё не
+  // подписанные этой ролью бланки месяца (каждый пересобирается из СВОЕГО
+  // оригинала + обеих подписей — та же логика, что у одиночного tsSign).
+  function tsSignGroup(month, signer) {
+    if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена) — подпись табеля недоступна. Введите токен в настройках.'); return; }
+    var mates = C.timesheetsOfMonth(timesheets, month);
+    var targets = mates.filter(function (t) { return signer === 'caregiver' ? !t.caregiverSigned : !t.familySigned; });
+    if (!targets.length) return;
+    showToast('Загружаю бланки…');
+    Promise.all(targets.map(function (t) {
+      return window.MetapelSync.fetchTimesheetFile(settings, t.id, '').then(function (obj) {
+        var u8 = window.MetapelTimesheet.u8FromDataUrl(obj.pdf);
+        return window.MetapelTimesheet.parse(u8).then(function (parsed) {
+          if (!parsed.slots.length) throw new Error('в бланке «' + (t.fileName || t.id) + '» не нашлось мест для подписи');
+          return { t: t, u8: u8, slots: parsed.slots };
+        });
+      });
+    })).then(function (jobs) {
+      var many = jobs.length > 1;
+      var title = signer === 'caregiver' ? '✍ Подпись Метапелет' : '✍ Подпись за Григория';
+      var desc = (signer === 'caregiver'
+        ? 'Распишитесь <b>один раз</b> — синяя подпись Джамшида встанет в каждый рабочий день'
+        : 'Распишитесь <b>один раз</b> за Григория — чёрная недельная подпись встанет на каждую рабочую неделю')
+        + (many ? ' <b>в обоих бланках месяца</b>.' : '.');
+      openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (newSig) {
+        showToast('Расставляю подписи…');
+        Promise.all(jobs.map(function (job) {
+          var careSig = signer === 'caregiver' ? newSig : job.t.caregiverSig;
+          var famSig = signer === 'family' ? newSig : job.t.familySig;
+          return tsBuildSigned(job.u8, job.slots, careSig, famSig);
+        })).then(function (signedList) {
+          tsShowPreview(signedList[0], function () { tsSaveSignedGroup(jobs, signedList, signer, newSig); },
+            many ? { btnText: '✓ Сохранить оба бланка',
+                     hintText: 'Показан бланк 1 из ' + jobs.length + ' — во втором подписи встанут так же. Затем сохраните.' } : null);
+        }).catch(function (e) { appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
+      }, tsInkColor(signer));
+    }).catch(function (e) { appAlert('Не удалось загрузить/разобрать бланки: ' + (e && e.message || e)); });
+  }
+
+  // сохраняет подписанные бланки ПОСЛЕДОВАТЕЛЬНО; при сбое на середине уже
+  // сохранённые остаются (их записи помечены), повторное нажатие подписи
+  // доподпишет только несохранённые бланки
+  function tsSaveSignedGroup(jobs, signedList, signer, newSig) {
+    showToast('Сохраняю подписанные бланки…');
+    var i = 0;
+    function next() {
+      if (i >= jobs.length) {
+        reloadData();
+        render();
+        showToast('✓ Подпись сохранена' + (jobs.length > 1 ? ' в оба бланка' : ''));
+        runSync();
+        return;
+      }
+      var job = jobs[i], signedU8 = signedList[i];
+      i++;
+      var dataUrl = window.MetapelTimesheet.bytesToDataUrl(signedU8, 'application/pdf');
+      window.MetapelSync.putTimesheetFile(settings, job.t.id, '-signed',
+        { pdf: dataUrl, fileName: job.t.fileName, month: job.t.month }).then(function () {
+        var patch = {};
+        if (signer === 'caregiver') { patch.caregiverSigned = true; patch.caregiverSignedDate = today(); patch.caregiverSig = newSig; }
+        else { patch.familySigned = true; patch.familySignedDate = today(); patch.familySig = newSig; }
+        S.updateTimesheet(job.t.id, patch);
+        next();
+      }).catch(function (e) {
+        reloadData();
+        render();
+        runSync();
+        appAlert('Бланк «' + (job.t.fileName || job.t.id) + '» не сохранился: ' + (e && e.message || e) +
+          '\nУже сохранённые бланки в порядке. Нажмите кнопку подписи ещё раз — она встанет только в несохранённый бланк.');
+      });
+    }
+    next();
   }
 
   // ---------- скачивание / отправка (Этап 3) ----------
@@ -705,6 +1037,83 @@
       render();
       showToast('✓ Отмечено: отослано');
       runSync();
+    });
+  }
+
+  function tsMarkSentGroup(month) {
+    var mates = C.timesheetsOfMonth(timesheets, month);
+    appConfirm('Отметить ОБА бланка месяца как отосланные в Матав?', '✓ Отослано', function () {
+      mates.forEach(function (t) { S.updateTimesheet(t.id, { sentMarked: true, sentDate: today() }); });
+      reloadData();
+      render();
+      showToast('✓ Отмечено: отослано');
+      runSync();
+    });
+  }
+
+  // Отправка ВСЕХ бланков месяца ОДНИМ письмом. Второй PDF идёт параметрами
+  // content2/filename2 — в шаблоне EmailJS должно быть настроено ВТОРОЕ
+  // Variable Attachment (см. настройку шаблона); для месяцев с одним бланком
+  // параметры content2/filename2 не передаются вовсе — вложение пропускается.
+  function tsSendGroup(month) {
+    var mates = C.timesheetsOfMonth(timesheets, month);
+    if (mates.length > 2) { appAlert('Поддерживается не больше двух бланков в месяце (в письме два вложения).'); return; }
+    if (mates.length < 2) { if (mates.length === 1) tsSend(mates[0].id); return; }
+    var ej = settings.emailjs || {};
+    if (!ej.serviceId || !ej.templateId || !ej.publicKey || !ej.recipient) {
+      appAlert('Авто-отправка (EmailJS) не настроена. Зайдите в Настройки → «Отправка в Матав (EmailJS)» и заполните поля. Либо скачайте оба подписанных PDF, отправьте письмом вручную и отметьте «Отослано».');
+      return;
+    }
+    if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена).'); return; }
+    var toList = tsParseRecipients(ej.recipient);
+    if (!toList.length) { appAlert('Не указан e-mail получателя (Матав) в настройках.'); return; }
+    var badEmails = toList.filter(function (a) { return !tsIsEmail(a); });
+    if (badEmails.length) {
+      appAlert('Похоже, эти адреса записаны с ошибкой:\n' + badEmails.join('\n') +
+        '\n\nПроверьте список получателей в Настройках (адреса через запятую или точку с запятой).');
+      return;
+    }
+    var toStr = toList.join(', ');
+    var already = mates.every(function (t) { return !!t.sentMarked; });
+    var confirmMsg = (already ? 'Отправить ОБА бланка ПОВТОРНО' : 'Отправить ОБА подписанных бланка') +
+      ' одним письмом в Матав?\n\nКому: ' + toList.join(', ');
+    appConfirm(confirmMsg, already ? '📧 Отослать повторно' : '📧 Отправить', function () {
+      showToast('Готовлю и отправляю…');
+      Promise.all(mates.map(function (t) {
+        return window.MetapelSync.fetchTimesheetFile(settings, t.id, '-signed').then(function (obj) {
+          var dataUri = String(obj.pdf);
+          if (dataUri.indexOf('data:') !== 0) dataUri = 'data:application/pdf;base64,' + dataUri;
+          return dataUri;
+        });
+      })).then(function (uris) {
+        var monthSlash = tsMonthSlash(month);
+        var subject = 'יומן עבודה חתום — ' + monthSlash;
+        var messageHtml =
+          '<div dir="rtl" style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.7;color:#1f2937;">' +
+            '<p>לכבוד מטב,</p>' +
+            '<p>מצורפים בזאת <b>שני יומני עבודה חתומים</b> עבור המטופל <b>גריגורי רזומובסקי</b> לתקופה <b>' + monthSlash + '</b>.</p>' +
+            '<p>היומנים חתומים על ידי המטפל ועל ידי בן המשפחה.</p>' +
+            '<p>נא לאשר את קבלת המסמכים. תודה רבה.</p>' +
+            '<p style="margin-top:18px;">בברכה,<br>משפחת רזומובסקי</p>' +
+          '</div>';
+        return tsLoadEmailJS().then(function () {
+          return window.emailjs.send(ej.serviceId, ej.templateId, {
+            to_email: toStr, recipient: toStr, month: monthSlash,
+            subject: subject, message_html: messageHtml,
+            filename: 'tabel-' + month + '-1-signed.pdf', content: uris[0],
+            filename2: 'tabel-' + month + '-2-signed.pdf', content2: uris[1]
+          }, { publicKey: ej.publicKey });
+        });
+      }).then(function () {
+        mates.forEach(function (t) { S.updateTimesheet(t.id, { sentMarked: true, sentDate: today() }); });
+        reloadData();
+        render();
+        showToast('✓ Оба бланка отосланы в Матав');
+        runSync();
+      }).catch(function (e) {
+        appAlert('Не удалось отправить через EmailJS: ' + (e && (e.text || e.message) || e) +
+          '\n\nЗапасной путь: скачать оба подписанных PDF, отправить вручную, затем «Отметить Отослано».');
+      });
     });
   }
 
@@ -842,7 +1251,7 @@
     var unpaid = occ.filter(function (o) { return o.status !== 'paid'; });
     content.appendChild(el('div', 'summary',
       'Всего заплатить в ближайшие ' + HORIZON_DAYS + ' дней: <b>' +
-      C.fmtMoney(sumAmounts(unpaid)) + '</b>'));
+      C.fmtMoney(sumAmounts(unpaid)) + '</b>' + missingNote(unpaid)));
     if (!up.length) {
       content.appendChild(el('div', 'empty', 'Ближайших платежей нет.'));
       return;
@@ -1040,6 +1449,12 @@
   // ---------- диалог оплаты ----------
 
   function openPayModal(o) {
+    // страховка на случай устаревшей карточки (фоновая синхронизация могла
+    // убрать сумму от Матав): платить по непосчитанному начислению нечего
+    if (payBlocked(o)) {
+      appAlert('Сначала введите сумму, присланную Матав, — без неё это начисление не посчитано.');
+      return;
+    }
     currentPay = o;
     $('#pay-title').textContent = (TYPE_ICONS[o.type] || '💵') + ' ' + o.title;
     $('#pay-due').textContent = 'Срок: ' + C.fmtDate(o.dueDate);
@@ -1097,6 +1512,10 @@
 
   function confirmPay() {
     if (!actionGuard()) return;
+    if (currentPay && payBlocked(currentPay)) {
+      appAlert('Сначала введите сумму, присланную Матав, — без неё это начисление не посчитано.');
+      return;
+    }
     var amount = parseFloat($('#pay-amount').value);
     var paidDate = $('#pay-date').value;
     if (isNaN(amount) || amount < 0) { appAlert('Укажите сумму.'); return; }
@@ -1298,11 +1717,16 @@
         }
       });
       // 3) дослать расписки и 4) залить локальные изменения (если есть и не устарели)
+      // Суммы от Матав принимаются ВНУТРИ backupIfChanged, ДО заливки: если сама
+      // заливка потом упадёт (CAS 409, обрыв сети), в хранилище уже новые суммы, а
+      // на экране остались бы карточки по старым — и заплатить можно по устаревшей
+      // цифре (диалог оплаты берёт сумму из отрисованного начисления).
+      var blBefore = JSON.stringify(settings.bl || null);
       return window.MetapelSync.processQueue(settings, S, null).then(function (sent) {
         return window.MetapelSync.backupIfChanged(settings, S, C.hashString).then(function (backedUp) {
           syncInFlight = false;
-          if (sent > 0 || backedUp) {
-            settings = S.loadSettings(); // backupIfChanged мог принять облачную «сумму от Матав»
+          settings = S.loadSettings(); // backupIfChanged мог принять облачную «сумму от Матав»
+          if (sent > 0 || backedUp || JSON.stringify(settings.bl || null) !== blBefore) {
             reloadData();
             backgroundRender();
           } else if ((S.getMeta('lastSyncError') || null) !== errBefore) {
@@ -1460,6 +1884,50 @@
     return '🟢 Состояние: всё отправлено.';
   }
 
+  // Список сумм от Матав по месяцам в настройках: правка существующих и
+  // добавление месяца. ВАЖНО: полям этого списка НЕ ставим dataset.path —
+  // иначе их подхватит общий сборщик формы (saveSettingsForm) и попытается
+  // записать значение по несуществующему пути настроек.
+  function renderMatavMonths(fs) {
+    var bl = settings.bl || {};
+    var by = (bl.matavByMonth && typeof bl.matavByMonth === 'object') ? bl.matavByMonth : {};
+    var keys = Object.keys(by).filter(function (k) { return YM_RE.test(k); }).sort().reverse();
+    if (!keys.length) {
+      fs.appendChild(el('div', 'hint', 'Помесячных сумм пока нет' +
+        (bl.matavAmount > 0
+          ? ' — пока считается по старой единой сумме ' + C.fmtMoney(bl.matavAmount) +
+            ' в месяц. Как только введёте первый месяц, считаться будут только помесячные суммы.'
+          : '.')));
+    }
+    keys.forEach(function (k) {
+      var row = el('div', 'form-row');
+      row.appendChild(el('label', null,
+        esc(ymLabel(k)) + ': <b>' + C.fmtMoney(by[k]) + '</b>'));
+      var btn = el('button', 'btn btn-light', '✎ Изменить');
+      btn.type = 'button';
+      btn.addEventListener('click', function () { openMatavModal(k); });
+      row.appendChild(btn);
+      fs.appendChild(row);
+    });
+    var addRow = el('div', 'form-row');
+    var lbl = el('label', null, 'Добавить месяц');
+    lbl.htmlFor = 'matav-add-month';
+    addRow.appendChild(lbl);
+    // <input type="month"> даёт готовый формат 'YYYY-MM' — руками ключ не собираем
+    var inp = el('input');
+    inp.type = 'month';
+    inp.id = 'matav-add-month';
+    addRow.appendChild(inp);
+    var add = el('button', 'btn btn-light', '➕ Ввести сумму');
+    add.type = 'button';
+    add.addEventListener('click', function () {
+      if (!YM_RE.test(inp.value)) { appAlert('Выберите месяц (год и месяц).'); return; }
+      openMatavModal(inp.value);
+    });
+    addRow.appendChild(add);
+    fs.appendChild(addRow);
+  }
+
   function settingsForm() {
     return [
       { section: 'Общие', fields: [
@@ -1473,13 +1941,17 @@
         { path: 'passwordTtlMinutes', label: 'Помнить пароль настроек, минут', type: 'number' }
       ] },
       { section: '🤝 Гмлат сиуд: сколько платит Матав', enable: 'bl.approved',
+        // список сумм по месяцам рисуется своим кодом (renderMatavMonths):
+        // одним полем формы его не выразить, а старое единое поле bl.matavAmount
+        // убрано из интерфейса — оно осталось только в данных, для совместимости
+        custom: renderMatavMonths,
         hint: 'Матав платит работнику часть зарплаты (за счёт пособия по уходу от ' +
-          'Битуах Леуми), остальное доплачиваете вы. Укажите сумму, которую Матав ' +
-          'платит в месяц — её удобнее задавать на главном экране кнопкой «Указать ' +
-          'сумму от Матав» (меняется месяц к месяцу). Галочка слева — учитывать эту ' +
-          'сумму. Сейчас учтено: ' + C.fmtMoney(C.blMonthlyOffset(settings)) + ' в месяц.',
+          'Битуах Леуми), остальное доплачиваете вы. Сумма приходит 9-го числа и ' +
+          'каждый месяц РАЗНАЯ, поэтому вводится за конкретный месяц: на главном ' +
+          'экране кнопкой у карточки зарплаты или в списке выше. Галочка слева — ' +
+          'учитывать эти суммы. Суммы месяцев сохраняются сразу, отдельной кнопкой ' +
+          'окна; если вы правили другие поля — сначала нажмите «Сохранить настройки».',
         fields: [
-        { path: 'bl.matavAmount', label: 'Матав платит, ₪ в месяц', type: 'number', min: 0 },
         { path: 'bl.applyToSocial', label: 'Уменьшать также взносы, пикадон и хавраа', type: 'checkbox' }
       ] },
       { section: '🧮 Окончание работы (для калькулятора)',
@@ -1658,6 +2130,7 @@
         row.appendChild(input);
         fs.appendChild(row);
       });
+      if (sec.custom) sec.custom(fs); // раздел со своей разметкой (список месяцев Матав)
       if (sec.hint) fs.appendChild(el('div', 'hint', esc(sec.hint)));
       form.appendChild(fs);
     });
@@ -1707,8 +2180,15 @@
         appConfirm('Заменить данные на этом устройстве резервной копией из архива GitHub? ' +
           'Текущие записи будут перезаписаны.', 'Да, восстановить', function () {
           window.MetapelSync.fetchBackup(settings).then(function (data) {
-            data.settings = data.settings || {};
-            data.settings.sync = settings.sync; // токен этого устройства сохраняем
+            // Настройки берём облачные, но device-local поля (токен синхронизации,
+            // размер текста) остаются свои, а помесячные суммы от Матав —
+            // ОБЪЕДИНЯЮТСЯ: их вводят на разных устройствах, и месяц, введённый
+            // здесь и ещё не уехавший в облако, потерять нельзя — иначе вместо него
+            // снова заработала бы легаси-цифра, одна на все месяцы (ровно тот дефект,
+            // ради которого суммы стали помесячными). Та же функция применяется при
+            // обычном подтягивании, чтобы обе дороги давали одинаковый результат.
+            data.settings = window.MetapelSync.mergeSettingsFromCloud(settings, data.settings || {})
+              || settings;
             S.saveSettings(data.settings);
             // ВАЖНО: восстанавливаем И табели — иначе устройство после «Восстановить»
             // остаётся без них (они есть в бэкапе), и автоподтягивание потом считает
@@ -1780,9 +2260,12 @@
       if (p1.length < 4) { appAlert('Пароль должен быть не короче 4 символов.'); return; }
       draft.passwordHash = C.hashString(p1);
     }
-    // approved привязан к сумме от Матав: галочка раздела «Гмлат сиуд» без
-    // введённой суммы не должна включать учёт (иначе занижение доплаты семьи)
-    if (draft.bl) draft.bl.approved = (typeof draft.bl.matavAmount === 'number' && draft.bl.matavAmount > 0);
+    // approved привязан к суммам от Матав: галочка раздела «Гмлат сиуд» без единой
+    // введённой суммы не должна включать учёт (иначе занижение доплаты семьи).
+    // Но и подменять галочку нельзя: снятая вручную — это единственный способ
+    // сказать «Матав больше не платит» и вернуться к полной зарплате, а прежнее
+    // безусловное присваивание делало галочку мёртвой.
+    if (draft.bl) draft.bl.approved = !!draft.bl.approved && blHasAmount(draft.bl);
     S.saveSettings(draft);
     settings = S.loadSettings();
     render();
@@ -1822,10 +2305,15 @@
     var t = realToday(); // уведомление — раз в реальный день
     if (S.getMeta('lastNotify') === t) return;
     S.setMeta('lastNotify', t);
+    // сумма считается по amount, а начисления без суммы от Матав в ней нулевые:
+    // на экране про это пишет missingNote, в уведомлении — эта же оговорка,
+    // иначе с экрана блокировки цифра выглядит как полная сумма к оплате
+    var incomplete = due.filter(function (o) { return o.blMissing; }).length;
     showSystemNotification('Выплаты метапелю — ' + settings.workerName, {
       body: 'Требуют внимания: ' + due.length + ' ' +
         C.plural(due.length, 'платёж', 'платежа', 'платежей') +
-        ' на ' + C.fmtMoney(due.reduce(function (s, o) { return s + o.amount; }, 0)),
+        ' на ' + C.fmtMoney(due.reduce(function (s, o) { return s + o.amount; }, 0)) +
+        (incomplete ? ' (без учёта ' + incomplete + ' — не введена сумма от Матав)' : ''),
       tag: 'metapel-daily'
     });
   }
@@ -1894,6 +2382,7 @@
     currentSign = null;
     signCallback = null;
     tsPreviewSave = null;
+    matavMonth = null;
     confirmCallback = null;
     updateScrollLock();
     // полсекунды игнорируем касания: «дребезг» пальца после закрытия окна
@@ -1910,7 +2399,9 @@
     if (settings._v6) return;
     settings._v6 = true;
     settings.bl = settings.bl || {};
-    settings.bl.approved = (typeof settings.bl.matavAmount === 'number' && settings.bl.matavAmount > 0);
+    // помесячные суммы тоже считаются «введённой суммой»: устройство, которое ещё
+    // не мигрировало, но уже получило matavByMonth из облака, иначе снесло бы approved
+    settings.bl.approved = blHasAmount(settings.bl);
     if (settings.types) {
       if (settings.types.visa) settings.types.visa.enabled = false;
       if (settings.types.permit) settings.types.permit.enabled = false;
@@ -2091,12 +2582,11 @@
     });
     $('#final-calc').addEventListener('click', runFinalCalc);
 
-    // часы Битуах Леуми (главный экран)
+    // сумма от Матав за месяц (окно вызывается с карточки зарплаты и из настроек)
     $('#hours-minus').addEventListener('click', function () { stepHours(-1); });
     $('#hours-plus').addEventListener('click', function () { stepHours(1); });
     $('#hours-input').addEventListener('input', updateHoursEffect);
-    $('#hours-save').addEventListener('click', saveHours);
-    $('#hours-revert').addEventListener('click', revertHours);
+    $('#hours-save').addEventListener('click', saveMatavMonth);
 
     // загрузка табеля Битуах Леуми (PDF) — метаданные локально, файл в архив
     $('#ts-file-input').addEventListener('change', function (e) {

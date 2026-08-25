@@ -427,6 +427,27 @@
     eq('timesheetStatus: отослано перекрывает → sent', tss({ caregiverSigned: true, familySigned: true, sentMarked: true }), 'sent');
     eq('timesheetStatus: sent даже без подписей (защитно) → sent', tss({ sentMarked: true }), 'sent');
 
+    // ---------- табели: несколько бланков в месяце (Claims Conference, 08/2026+) ----------
+    var tsList = [
+      { id: 'ts-300', month: '2026-08', caregiverSigned: true, familySigned: true },
+      { id: 'ts-100', month: '2026-08' },
+      { id: 'ts-200', month: '2026-07', sentMarked: true }
+    ];
+    eq('timesheetsOfMonth: фильтр по месяцу + порядок загрузки (по id)',
+      C.timesheetsOfMonth(tsList, '2026-08').map(function (t) { return t.id; }).join(','), 'ts-100,ts-300');
+    eq('timesheetsOfMonth: чужой месяц не попадает',
+      C.timesheetsOfMonth(tsList, '2026-07').length, 1);
+    eq('groupStatus: unsigned+full → unsigned (по самому отстающему)',
+      C.timesheetGroupStatus(C.timesheetsOfMonth(tsList, '2026-08')), 'unsigned');
+    eq('groupStatus: full+full → full',
+      C.timesheetGroupStatus([{ caregiverSigned: true, familySigned: true }, { caregiverSigned: true, familySigned: true }]), 'full');
+    eq('groupStatus: full+sent → full (месяц не отослан, пока не отосланы ВСЕ)',
+      C.timesheetGroupStatus([{ caregiverSigned: true, familySigned: true, sentMarked: true }, { caregiverSigned: true, familySigned: true }]), 'full');
+    eq('groupStatus: sent+sent → sent',
+      C.timesheetGroupStatus([{ sentMarked: true }, { sentMarked: true }]), 'sent');
+    eq('groupStatus: одиночный бланк = его статус',
+      C.timesheetGroupStatus([{ caregiverSigned: true }]), 'caregiver');
+
     // ---------- вывод ----------
     var table = document.getElementById('results');
     var passed = 0;

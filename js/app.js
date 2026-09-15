@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.9 от 16.08.2026 (Два бланка месяца: одна подпись на оба, одно письмо с двумя PDF)';
+  var APP_VERSION = '6.9.1 от 15.09.2026 (Синхронизация не теряет запросы во время активного прогона; «✓» загрузки табеля — после отправки карточки в облако)';
 
   // ---------- «сегодня» ----------
 
@@ -1679,10 +1679,16 @@
   // обновляет резервную копию данных. Параллельные запуски запрещены —
   // иначе дубль-отправки и гонка sha на GitHub.
   var syncInFlight = false;
+  // Запрос, пришедший во время активного прогона, НЕ выбрасываем, а повторяем
+  // после завершения: раньше «дослать метаданные» после загрузки табеля молча
+  // терялся, пока шла стартовая синхронизация, — карточки оставались только в
+  // localStorage (инциденты 27.08 и 15.09.2026: PDF в архиве, в облаке пусто).
+  var syncAgain = false;
+  var syncTail = Promise.resolve(); // промис последнего запрошенного прогона
 
   function runSync() {
-    if (syncInFlight) return;
-    if (!window.MetapelSync.isOn(settings)) return;
+    if (syncInFlight) { syncAgain = true; return syncTail; }
+    if (!window.MetapelSync.isOn(settings)) return Promise.resolve();
     syncInFlight = true;
     var errBefore = S.getMeta('lastSyncError') || null;
     // Пролог — внутри промиса: синхронный throw (например, недопустимый символ в
@@ -1696,7 +1702,7 @@
         ? window.MetapelSync.pullIfNewer(settings, S, C.hashString)
         : null;
     });
-    pullStep.then(function (pulled) {
+    syncTail = pullStep.then(function (pulled) {
       if (pulled) {
         settings = S.loadSettings(); // подтянулась и общая «сумма от Матав»
         reloadData();
@@ -1740,7 +1746,17 @@
     }).catch(function () {
       syncInFlight = false;
       if ((S.getMeta('lastSyncError') || null) !== errBefore) backgroundRender();
-    });
+    }).then(syncAfterRun, syncAfterRun);
+    return syncTail;
+  }
+
+  // Накопившийся за время прогона повтор (см. syncAgain); промис runSync
+  // резолвится только ПОСЛЕ повтора — ожидающие получают состояние, в котором
+  // их данные действительно попали в прогон. Вторым аргументом .then — чтобы
+  // даже сбой в отрисовке внутри catch-ветки не проглотил повтор и не подвесил
+  // ожидающих реджектом (у загрузчика табеля нет своего catch на этот промис).
+  function syncAfterRun() {
+    if (syncAgain) { syncAgain = false; return runSync(); }
   }
 
   // ---------- дополнительные платежи (подарок / под отчёт) ----------
@@ -2623,10 +2639,32 @@
             window.MetapelSync.putTimesheetFile(settings, id, '', {
               pdf: dataUrl, fileName: file.name, month: month
             }).then(function () {
-              showToast('✓ Табель загружен (' + month + ')');
-              runSync();
-            }).catch(function (err) {
-              // PDF не попал в архив — убираем «битую» карточку, чтобы подпись потом не падала
+              // «✓» — только когда карточка реально ушла в облако: раньше тост
+              // появлялся ДО синхронизации метаданных, приложение закрывали — и
+              // на других устройствах табеля не было (PDF в архиве, бэкап без записи)
+              showToast('PDF в архиве, отправляю карточку в облако…');
+              return runSync().then(function () {
+                // «Синхронизировано» = локальный хэш совпал с залитым (lastBackupHash) —
+                // глобальный lastSyncError тут не годится: его могла поставить чужая
+                // застрявшая расписка ПОСЛЕ успешного пуша карточки (ложная тревога)
+                var clean = false;
+                try {
+                  clean = C.hashString(window.MetapelSync.buildBackupJson(settings, S, 0)) ===
+                    S.getMeta('lastBackupHash');
+                } catch (e) {}
+                if (clean) {
+                  showToast('✓ Табель загружен и синхронизирован (' + month + ')');
+                } else {
+                  var err = S.getMeta('lastSyncError');
+                  appAlert('PDF табеля в архиве, но карточка ещё НЕ в облаке' +
+                    (err ? ' (' + err + ')' : '') +
+                    '.\nОставьте приложение открытым — оно дошлёт само (авто-синхронизация раз в 15 минут). Повторно загружать не нужно.');
+                }
+              });
+            }, function (err) {
+              // PDF не попал в архив — убираем «битую» карточку, чтобы подпись потом
+              // не падала. Обработчик ВТОРЫМ аргументом then: откат карточки только
+              // при провале putTimesheetFile, а не из-за ошибки последующего sync.
               S.deleteTimesheet(id);
               reloadData();
               render();

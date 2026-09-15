@@ -179,14 +179,13 @@
         <label for="hours-input">Матав платит, ₪/мес</label>
         <div class="stepper">
           <button type="button" id="hours-minus">−</button>
-          <input type="number" id="hours-input" min="0" step="100">
+          <input type="number" id="hours-input" min="0" step="0.01">
           <button type="button" id="hours-plus">+</button>
         </div>
       </div>
       <div class="hint" id="hours-effect"></div>
       <div class="modal-actions">
         <button class="btn btn-pay" id="hours-save">✓ Сохранить сумму</button>
-        <button class="btn btn-light" id="hours-revert" style="display:none">Матав сейчас не платит — отключить учёт</button>
         <button class="btn btn-undo modal-close">Отмена</button>
       </div>
     </div>

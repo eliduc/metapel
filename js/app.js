@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.9.3 от 16.09.2026 (Анти-гонка подписей: перед пересборкой подписанного PDF подписи дополняются из облака)';
+  var APP_VERSION = '6.10 от 16.09.2026 (Кнопка «Тестовая отправка»: письмо с бланками только себе, для проверки перед отправкой в Матав)';
 
   // ---------- «сегодня» ----------
 
@@ -764,11 +764,14 @@
       acts.appendChild(tsBtn('⬇ Скачать подписанный PDF', 'btn-light', function () { tsDownload(t.id); }));
     }
     if (st === 'full') {
+      // тестовая отправка — себе, для проверки вложения ПЕРЕД письмом в Матав
+      acts.appendChild(tsBtn('🧪 Тестовая отправка (только себе)', 'btn-light', function () { tsSend(t.id, true); }));
       acts.appendChild(tsBtn('📧 Отослать в Матав', 'btn-pay', function () { tsSend(t.id); }));
       acts.appendChild(tsBtn('✓ Отметить «Отослано»', 'btn-light', function () { tsMarkSent(t.id); }));
     }
     if (st === 'sent') {
       acts.appendChild(el('div', 'card-due', 'отослано ' + C.fmtDate(t.sentDate)));
+      acts.appendChild(tsBtn('🧪 Тестовая отправка (только себе)', 'btn-light', function () { tsSend(t.id, true); }));
       acts.appendChild(tsBtn('📧 Отослать повторно', 'btn-pay', function () { tsSend(t.id); }));
     }
     acts.appendChild(tsBtn('🗑 Удалить табель', 'btn-undo', function () { tsDelete(t.id); }));
@@ -814,12 +817,17 @@
       }
     });
     if (allFull && !allSent) {
+      // тестовая отправка — себе, для проверки вложений ПЕРЕД письмом в Матав
+      acts.appendChild(tsBtn('🧪 Тестовая отправка (только себе)', 'btn-light',
+        function () { tsSendGroup(month, true); }));
       acts.appendChild(tsBtn('📧 Отослать в Матав (оба бланка одним письмом)', 'btn-pay',
         function () { tsSendGroup(month); }));
       acts.appendChild(tsBtn('✓ Отметить «Отослано»', 'btn-light', function () { tsMarkSentGroup(month); }));
     }
     if (allSent) {
       acts.appendChild(el('div', 'card-due', 'отослано ' + C.fmtDate(mates[0].sentDate)));
+      acts.appendChild(tsBtn('🧪 Тестовая отправка (только себе)', 'btn-light',
+        function () { tsSendGroup(month, true); }));
       acts.appendChild(tsBtn('📧 Отослать повторно (оба)', 'btn-pay', function () { tsSendGroup(month); }));
     }
     mates.forEach(function (t, i) {
@@ -1099,18 +1107,26 @@
   // content2/filename2 — в шаблоне EmailJS должно быть настроено ВТОРОЕ
   // Variable Attachment (см. настройку шаблона); для месяцев с одним бланком
   // параметры content2/filename2 не передаются вовсе — вложение пропускается.
-  function tsSendGroup(month) {
+  // isTest: письмо уходит ТОЛЬКО на «тестового получателя» из настроек, тема с
+  // пометкой [ТЕСТ], статус «отослано» НЕ ставится — проверка вложений перед
+  // боевым письмом в Матав (ошибки отправки табелей уже случались).
+  function tsSendGroup(month, isTest) {
     var mates = C.timesheetsOfMonth(timesheets, month);
     if (mates.length > 2) { appAlert('Поддерживается не больше двух бланков в месяце (в письме два вложения).'); return; }
-    if (mates.length < 2) { if (mates.length === 1) tsSend(mates[0].id); return; }
+    if (mates.length < 2) { if (mates.length === 1) tsSend(mates[0].id, isTest); return; }
     var ej = settings.emailjs || {};
-    if (!ej.serviceId || !ej.templateId || !ej.publicKey || !ej.recipient) {
+    if (!ej.serviceId || !ej.templateId || !ej.publicKey || (!isTest && !ej.recipient)) {
       appAlert('Авто-отправка (EmailJS) не настроена. Зайдите в Настройки → «Отправка в Матав (EmailJS)» и заполните поля. Либо скачайте оба подписанных PDF, отправьте письмом вручную и отметьте «Отослано».');
       return;
     }
     if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена).'); return; }
-    var toList = tsParseRecipients(ej.recipient);
-    if (!toList.length) { appAlert('Не указан e-mail получателя (Матав) в настройках.'); return; }
+    var toList = tsParseRecipients(isTest ? ej.testRecipient : ej.recipient);
+    if (!toList.length) {
+      appAlert(isTest
+        ? 'Тестовый адрес не указан. Настройки → «Отправка табелей в Матав (EmailJS)» → «Тестовый получатель».'
+        : 'Не указан e-mail получателя (Матав) в настройках.');
+      return;
+    }
     var badEmails = toList.filter(function (a) { return !tsIsEmail(a); });
     if (badEmails.length) {
       appAlert('Похоже, эти адреса записаны с ошибкой:\n' + badEmails.join('\n') +
@@ -1119,9 +1135,11 @@
     }
     var toStr = toList.join(', ');
     var already = mates.every(function (t) { return !!t.sentMarked; });
-    var confirmMsg = (already ? 'Отправить ОБА бланка ПОВТОРНО' : 'Отправить ОБА подписанных бланка') +
-      ' одним письмом в Матав?\n\nКому: ' + toList.join(', ');
-    appConfirm(confirmMsg, already ? '📧 Отослать повторно' : '📧 Отправить', function () {
+    var confirmMsg = isTest
+      ? 'Отправить ОБА бланка ТЕСТОВЫМ письмом — только себе, БЕЗ Матав?\n\nКому: ' + toList.join(', ')
+      : (already ? 'Отправить ОБА бланка ПОВТОРНО' : 'Отправить ОБА подписанных бланка') +
+        ' одним письмом в Матав?\n\nКому: ' + toList.join(', ');
+    appConfirm(confirmMsg, isTest ? '🧪 Отправить тест' : (already ? '📧 Отослать повторно' : '📧 Отправить'), function () {
       showToast('Готовлю и отправляю…');
       Promise.all(mates.map(function (t) {
         return window.MetapelSync.fetchTimesheetFile(settings, t.id, '-signed').then(function (obj) {
@@ -1131,7 +1149,7 @@
         });
       })).then(function (uris) {
         var monthSlash = tsMonthSlash(month);
-        var subject = 'יומן עבודה חתום — ' + monthSlash;
+        var subject = (isTest ? '[ТЕСТ] ' : '') + 'יומן עבודה חתום — ' + monthSlash;
         var messageHtml =
           '<div dir="rtl" style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.7;color:#1f2937;">' +
             '<p>לכבוד מטב,</p>' +
@@ -1149,6 +1167,11 @@
           }, { publicKey: ej.publicKey });
         });
       }).then(function () {
+        if (isTest) {
+          // статусы НЕ трогаем: тест — не отправка в Матав
+          showToast('✓ Тестовое письмо отправлено — проверьте почту');
+          return;
+        }
         mates.forEach(function (t) { S.updateTimesheet(t.id, { sentMarked: true, sentDate: today() }); });
         reloadData();
         render();
@@ -1161,10 +1184,10 @@
     });
   }
 
-  function tsSend(id) {
+  function tsSend(id, isTest) {
     // авто-отправка через EmailJS (см. tsSendEmail); при отсутствии настроек —
     // подсказываем запасной путь (скачать + отметить вручную)
-    tsSendEmail(id);
+    tsSendEmail(id, isTest);
   }
 
   function tsLoadEmailJS() {
@@ -1178,18 +1201,24 @@
     });
   }
 
-  function tsSendEmail(id) {
+  function tsSendEmail(id, isTest) {
     var t = findTimesheet(id);
     if (!t) return;
     var ej = settings.emailjs || {};
-    if (!ej.serviceId || !ej.templateId || !ej.publicKey || !ej.recipient) {
+    if (!ej.serviceId || !ej.templateId || !ej.publicKey || (!isTest && !ej.recipient)) {
       appAlert('Авто-отправка (EmailJS) не настроена. Зайдите в Настройки → «Отправка в Матав (EmailJS)» и заполните поля. Либо нажмите «Скачать подписанный PDF», отправьте письмом вручную и отметьте «Отослано».');
       return;
     }
     if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена).'); return; }
-    // получателей может быть несколько (через запятую/точку с запятой) — нормализуем
-    var toList = tsParseRecipients(ej.recipient);
-    if (!toList.length) { appAlert('Не указан e-mail получателя (Матав) в настройках.'); return; }
+    // получателей может быть несколько (через запятую/точку с запятой) — нормализуем;
+    // тест уходит ТОЛЬКО на тестового получателя (см. tsSendGroup)
+    var toList = tsParseRecipients(isTest ? ej.testRecipient : ej.recipient);
+    if (!toList.length) {
+      appAlert(isTest
+        ? 'Тестовый адрес не указан. Настройки → «Отправка табелей в Матав (EmailJS)» → «Тестовый получатель».'
+        : 'Не указан e-mail получателя (Матав) в настройках.');
+      return;
+    }
     var badEmails = toList.filter(function (a) { return !tsIsEmail(a); });
     if (badEmails.length) {
       appAlert('Похоже, эти адреса записаны с ошибкой:\n' + badEmails.join('\n') +
@@ -1198,9 +1227,11 @@
     }
     var toStr = toList.join(', '); // EmailJS «To Email» принимает список через запятую
     var already = !!t.sentMarked;
-    var confirmMsg = (already ? 'Отправить табель ПОВТОРНО' : 'Отправить подписанный табель') +
-      ' письмом в Матав?\n\nКому: ' + toList.join(', ');
-    appConfirm(confirmMsg, already ? '📧 Отослать повторно' : '📧 Отправить', function () {
+    var confirmMsg = isTest
+      ? 'Отправить табель ТЕСТОВЫМ письмом — только себе, БЕЗ Матав?\n\nКому: ' + toList.join(', ')
+      : (already ? 'Отправить табель ПОВТОРНО' : 'Отправить подписанный табель') +
+        ' письмом в Матав?\n\nКому: ' + toList.join(', ');
+    appConfirm(confirmMsg, isTest ? '🧪 Отправить тест' : (already ? '📧 Отослать повторно' : '📧 Отправить'), function () {
       showToast('Готовлю и отправляю…');
       var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
       window.MetapelSync.fetchTimesheetFile(settings, id, suffix).then(function (obj) {
@@ -1215,7 +1246,7 @@
         // в 06/2026 превращался в &#x2F;, а визуальный редактор тела был хрупким
         // и текст не сохранялся). Так весь текст письма — под контролем кода.
         var monthSlash = tsMonthSlash(t.month);
-        var subject = 'יומן עבודה חתום — ' + monthSlash;
+        var subject = (isTest ? '[ТЕСТ] ' : '') + 'יומן עבודה חתום — ' + monthSlash;
         var messageHtml =
           '<div dir="rtl" style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.7;color:#1f2937;">' +
             '<p>לכבוד מטב,</p>' +
@@ -1232,6 +1263,11 @@
           }, { publicKey: ej.publicKey });
         });
       }).then(function () {
+        if (isTest) {
+          // статусы НЕ трогаем: тест — не отправка в Матав
+          showToast('✓ Тестовое письмо отправлено — проверьте почту');
+          return;
+        }
         S.updateTimesheet(id, { sentMarked: true, sentDate: today() });
         reloadData();
         render();
@@ -2042,7 +2078,9 @@
         { path: 'emailjs.templateId', label: 'Template ID', type: 'text' },
         { path: 'emailjs.publicKey', label: 'Public Key', type: 'text' },
         { path: 'emailjs.recipient', label: 'E-mail Матав (получатель, можно несколько)', type: 'text',
-          placeholder: 'mail1@matav.co.il, mail2@matav.co.il' }
+          placeholder: 'mail1@matav.co.il, mail2@matav.co.il' },
+        { path: 'emailjs.testRecipient', label: 'Тестовый получатель («Тестовая отправка» шлёт только сюда)', type: 'text',
+          placeholder: 'свой@адрес' }
       ] },
       { section: 'Зарплата', enable: 'types.salary.enabled', fields: [
         { path: 'types.salary.net', label: 'Нетто в месяц, ₪', type: 'number' },

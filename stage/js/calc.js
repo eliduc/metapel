@@ -184,7 +184,7 @@ window.MetapelCalc = (function () {
       // архив расписок: приватный репозиторий GitHub (Contents API)
       sync: { enabled: false, repo: 'eliduc/metapel-data', token: '' },
       // авто-отправка табелей в Матав (EmailJS); ключи только на устройстве
-      emailjs: { serviceId: '', templateId: '', publicKey: '', recipient: '' },
+      emailjs: { serviceId: '', templateId: '', publicKey: '', recipient: '', testRecipient: '' },
       types: {
         salary: {
           enabled: true, label: 'Зарплата',

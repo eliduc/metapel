@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.9.2 от 15.09.2026 (Сообщение о конфликте синхронизации согласовано с баннером — без «нажмите Восстановить»; stage-копии sync.js и index.html догнаны до прод-версии)';
+  var APP_VERSION = '6.9.3 от 16.09.2026 (Анти-гонка подписей: перед пересборкой подписанного PDF подписи дополняются из облака)';
 
   // ---------- «сегодня» ----------
 
@@ -882,16 +882,57 @@
           ? 'Распишитесь <b>один раз</b> — синяя подпись Джамшида встанет в каждый рабочий день.'
           : 'Распишитесь <b>один раз</b> за Григория — чёрная недельная подпись встанет на каждую рабочую неделю.';
         openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (newSig) {
-          // обе подписи: новая + уже сохранённая другого подписанта (хранится в записи)
-          var careSig = signer === 'caregiver' ? newSig : t.caregiverSig;
-          var famSig = signer === 'family' ? newSig : t.familySig;
           showToast('Расставляю подписи…');
-          tsBuildSigned(origU8, parsed.slots, careSig, famSig).then(function (signedU8) {
+          // обе подписи: новая + подпись другого подписанта из записи, ПРЕДВАРИТЕЛЬНО
+          // дополненной из облака (анти-гонка, см. tsAdoptCloudSigs)
+          tsAdoptCloudSigs([t]).then(function () {
+            var careSig = signer === 'caregiver' ? newSig : t.caregiverSig;
+            var famSig = signer === 'family' ? newSig : t.familySig;
+            return tsBuildSigned(origU8, parsed.slots, careSig, famSig);
+          }).then(function (signedU8) {
             tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer, newSig); });
           }).catch(function (e) { appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
         }, tsInkColor(signer));
       });
     }).catch(function (e) { appAlert('Не удалось загрузить/разобрать табель: ' + (e && e.message || e)); });
+  }
+
+  // АНТИ-ГОНКА (инциденты 27.08 и 16.09.2026): перед пересборкой подписанного
+  // PDF подтягиваем из облачной копии подписи, которых НЕТ в локальной записи.
+  // Иначе устройство, не успевшее сделать pull после подписи на другом
+  // устройстве, пересобирало бы файл без чужой подписи и затирало её (пересборка
+  // всегда идёт из оригинала + подписей ЗАПИСИ — см. tsBuildSigned).
+  // Свою (локальную) подпись облачной не заменяем; облако недоступно — молча
+  // подписываем по локальной записи, как раньше (офлайн-путь не ломаем).
+  function tsAdoptCloudSigs(recs) {
+    return window.MetapelSync.fetchBackup(settings).then(function (cloud) {
+      var byId = {};
+      ((cloud && cloud.timesheets) || []).forEach(function (c) { byId[c.id] = c; });
+      var changed = false;
+      recs.forEach(function (t) {
+        var c = byId[t.id];
+        if (!c) return;
+        var patch = {};
+        if (!t.caregiverSig && c.caregiverSig) {
+          patch.caregiverSig = c.caregiverSig;
+          patch.caregiverSigned = true;
+          patch.caregiverSignedDate = c.caregiverSignedDate || today();
+        }
+        if (!t.familySig && c.familySig) {
+          patch.familySig = c.familySig;
+          patch.familySigned = true;
+          patch.familySignedDate = c.familySignedDate || today();
+        }
+        var keys = Object.keys(patch);
+        if (keys.length) {
+          S.updateTimesheet(t.id, patch);
+          // объект t дальше используется пересборкой и колбэками — обновляем и его
+          keys.forEach(function (k) { t[k] = patch[k]; });
+          changed = true;
+        }
+      });
+      if (changed) reloadData();
+    }).catch(function () {});
   }
 
   // собирает подписанный PDF из ИСХОДНОГО бланка: метапелет (care-day, синий) +
@@ -961,11 +1002,14 @@
         + (many ? ' <b>в обоих бланках месяца</b>.' : '.');
       openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (newSig) {
         showToast('Расставляю подписи…');
-        Promise.all(jobs.map(function (job) {
-          var careSig = signer === 'caregiver' ? newSig : job.t.caregiverSig;
-          var famSig = signer === 'family' ? newSig : job.t.familySig;
-          return tsBuildSigned(job.u8, job.slots, careSig, famSig);
-        })).then(function (signedList) {
+        // записи дополняются подписями из облака ДО пересборки (анти-гонка)
+        tsAdoptCloudSigs(jobs.map(function (j) { return j.t; })).then(function () {
+          return Promise.all(jobs.map(function (job) {
+            var careSig = signer === 'caregiver' ? newSig : job.t.caregiverSig;
+            var famSig = signer === 'family' ? newSig : job.t.familySig;
+            return tsBuildSigned(job.u8, job.slots, careSig, famSig);
+          }));
+        }).then(function (signedList) {
           tsShowPreview(signedList[0], function () { tsSaveSignedGroup(jobs, signedList, signer, newSig); },
             many ? { btnText: '✓ Сохранить оба бланка',
                      hintText: 'Показан бланк 1 из ' + jobs.length + ' — во втором подписи встанут так же. Затем сохраните.' } : null);

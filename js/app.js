@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.10 от 16.09.2026 (Кнопка «Тестовая отправка»: письмо с бланками только себе, для проверки перед отправкой в Матав)';
+  var APP_VERSION = '6.11 от 28.09.2026 (Бланк Claims Conference: без подписи метапелет; Григорий расписывается отдельно за каждую неделю)';
 
   // ---------- «сегодня» ----------
 
@@ -704,6 +704,13 @@
   }
 
   var TS_LABELS = { unsigned: 'не подписан', caregiver: 'подписан метапелем', family: 'подписан Григорием', full: 'полностью подписан', sent: 'отослано' };
+  // метка бланка, распознанного как Claims Conference (record.claims ставится при
+  // загрузке и при подписании) — чтобы ДО подписания было видно, что его ждёт
+  var TS_CLAIMS_NOTE = '<b>Claims Conference</b>: Джамшид не подписывает, Григорий — отдельно за каждую неделю';
+
+  // «подписанный» файл -signed в архиве есть, только когда в бланк реально
+  // поставлена подпись: у бланка Claims одна лишь отметка метапелет файла не даёт
+  function tsHasSignedFile(t) { return !!(t && (t.familySigned || t.caregiverSig)); }
 
   function findTimesheet(id) {
     for (var i = 0; i < timesheets.length; i++) if (timesheets[i].id === id) return timesheets[i];
@@ -747,6 +754,7 @@
     var left = el('div', 'card-left');
     left.appendChild(el('div', 'card-title', '📋 Табель ' + esc(tsMonthSlash(t.month))));
     left.appendChild(el('div', 'card-due', 'загружен ' + C.fmtDate(t.uploadedDate)));
+    if (t.claims) left.appendChild(el('div', 'card-due', TS_CLAIMS_NOTE));
     head.appendChild(left);
     head.appendChild(el('div', 'ts-chip ts-' + st, TS_LABELS[st]));
     card.appendChild(head);
@@ -754,13 +762,13 @@
     var acts = el('div', 'ts-actions');
     if (st !== 'sent') {
       if (!t.caregiverSigned) {
-        acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSign(t.id, 'caregiver'); }));
+        acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSignGroup(t.month, 'caregiver'); }));
       }
       if (!t.familySigned) {
-        acts.appendChild(tsBtn('✍ Подпись Григория (член семьи)', 'btn-give-gift', function () { tsSign(t.id, 'family'); }));
+        acts.appendChild(tsBtn('✍ Подпись Григория (член семьи)', 'btn-give-gift', function () { tsSignGroup(t.month, 'family'); }));
       }
     }
-    if (t.caregiverSigned || t.familySigned) {
+    if (tsHasSignedFile(t)) {
       acts.appendChild(tsBtn('⬇ Скачать подписанный PDF', 'btn-light', function () { tsDownload(t.id); }));
     }
     if (st === 'full') {
@@ -791,7 +799,8 @@
       mates.length + ' бланка'));
     mates.forEach(function (t, i) {
       left.appendChild(el('div', 'card-due', 'бланк ' + (i + 1) + ': ' +
-        esc(String(t.fileName || t.id)) + ' — загружен ' + C.fmtDate(t.uploadedDate)));
+        esc(String(t.fileName || t.id)) + ' — загружен ' + C.fmtDate(t.uploadedDate) +
+        (t.claims ? '<br>' + TS_CLAIMS_NOTE : '')));
     });
     head.appendChild(left);
     head.appendChild(el('div', 'ts-chip ts-' + st, TS_LABELS[st]));
@@ -801,17 +810,20 @@
     var allFull = mates.every(function (t) { var s = C.timesheetStatus(t); return s === 'full' || s === 'sent'; });
     var acts = el('div', 'ts-actions');
     if (!allSent) {
+      // сколько раз расписываться, объясняет само окно подписи: метапелет — один
+      // раз (в бланк Claims его подпись не ставится), Григорий — один раз, а для
+      // бланка Claims — отдельно за каждую неделю
       if (mates.some(function (t) { return !t.caregiverSigned; })) {
-        acts.appendChild(tsBtn('✍ Подписать Метапелет (один раз — в оба бланка)', 'btn-pay',
+        acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay',
           function () { tsSignGroup(month, 'caregiver'); }));
       }
       if (mates.some(function (t) { return !t.familySigned; })) {
-        acts.appendChild(tsBtn('✍ Подпись Григория (один раз — в оба бланка)', 'btn-give-gift',
+        acts.appendChild(tsBtn('✍ Подпись Григория', 'btn-give-gift',
           function () { tsSignGroup(month, 'family'); }));
       }
     }
     mates.forEach(function (t, i) {
-      if (t.caregiverSigned || t.familySigned) {
+      if (tsHasSignedFile(t)) {
         acts.appendChild(tsBtn('⬇ Скачать бланк ' + (i + 1) + ' (подписанный)', 'btn-light',
           function () { tsDownload(t.id); }));
       }
@@ -873,37 +885,10 @@
   function tsIsEmail(a) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a); }
 
   // Подписать может каждый ОДИН раз. Подписанный PDF ВСЕГДА собирается заново из
-  // ИСХОДНОГО бланка + ОБЕИХ сохранённых подписей. Поэтому второе/повторное
+  // ИСХОДНОГО бланка + ВСЕХ сохранённых подписей записи. Поэтому второе/повторное
   // подписание не может потерять чужую подпись (раньше копили поверх скачанного
   // подписанного — сбой сети/кэша мог затереть подпись первого подписанта).
-  function tsSign(id, signer) {
-    if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена) — подпись табеля недоступна. Введите токен в настройках.'); return; }
-    var t = findTimesheet(id);
-    if (!t) return;
-    showToast('Загружаю бланк…');
-    window.MetapelSync.fetchTimesheetFile(settings, t.id, '').then(function (obj) {
-      var origU8 = window.MetapelTimesheet.u8FromDataUrl(obj.pdf);
-      return window.MetapelTimesheet.parse(origU8).then(function (parsed) {
-        if (!parsed.slots.length) { appAlert('В бланке не нашлось мест для подписи.'); return; }
-        var title = signer === 'caregiver' ? '✍ Подпись Метапелет' : '✍ Подпись за Григория';
-        var desc = signer === 'caregiver'
-          ? 'Распишитесь <b>один раз</b> — синяя подпись Джамшида встанет в каждый рабочий день.'
-          : 'Распишитесь <b>один раз</b> за Григория — чёрная недельная подпись встанет на каждую рабочую неделю.';
-        openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (newSig) {
-          showToast('Расставляю подписи…');
-          // обе подписи: новая + подпись другого подписанта из записи, ПРЕДВАРИТЕЛЬНО
-          // дополненной из облака (анти-гонка, см. tsAdoptCloudSigs)
-          tsAdoptCloudSigs([t]).then(function () {
-            var careSig = signer === 'caregiver' ? newSig : t.caregiverSig;
-            var famSig = signer === 'family' ? newSig : t.familySig;
-            return tsBuildSigned(origU8, parsed.slots, careSig, famSig);
-          }).then(function (signedU8) {
-            tsShowPreview(signedU8, function () { tsSaveSigned(t, signedU8, signer, newSig); });
-          }).catch(function (e) { appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
-        }, tsInkColor(signer));
-      });
-    }).catch(function (e) { appAlert('Не удалось загрузить/разобрать табель: ' + (e && e.message || e)); });
-  }
+  // Одиночный бланк и пара бланков месяца подписываются одним путём — tsSignGroup.
 
   // АНТИ-ГОНКА (инциденты 27.08 и 16.09.2026): перед пересборкой подписанного
   // PDF подтягиваем из облачной копии подписи, которых НЕТ в локальной записи.
@@ -921,8 +906,9 @@
         var c = byId[t.id];
         if (!c) return;
         var patch = {};
-        if (!t.caregiverSig && c.caregiverSig) {
-          patch.caregiverSig = c.caregiverSig;
+        if (!t.caregiverSig && c.caregiverSig) patch.caregiverSig = c.caregiverSig;
+        // отметку берём и БЕЗ картинки: бланк Claims метапелет только отмечает
+        if (!t.caregiverSigned && c.caregiverSigned) {
           patch.caregiverSigned = true;
           patch.caregiverSignedDate = c.caregiverSignedDate || today();
         }
@@ -930,6 +916,12 @@
           patch.familySig = c.familySig;
           patch.familySigned = true;
           patch.familySignedDate = c.familySignedDate || today();
+        }
+        // подписи по неделям (Claims) берём только к ТОЙ ЖЕ первой подписи, что уже
+        // есть у записи (или только что взята): чужой набор к своей подписи не лепим
+        var fam = patch.familySig || t.familySig;
+        if (!(t.familySigs && t.familySigs.length) && c.familySigs && c.familySigs.length && fam === c.familySig) {
+          patch.familySigs = c.familySigs;
         }
         var keys = Object.keys(patch);
         if (keys.length) {
@@ -944,11 +936,29 @@
   }
 
   // собирает подписанный PDF из ИСХОДНОГО бланка: метапелет (care-day, синий) +
-  // Григорий (family-week, чёрный). Любая отсутствующая подпись просто пропускается.
-  function tsBuildSigned(origU8, slots, careSig, famSig) {
+  // Григорий (family-week, чёрный). famSigs — отдельная подпись на каждую неделю
+  // (бланк Claims), иначе famSig во все недели. Отсутствующая подпись или роль без
+  // мест в бланке пропускается — её картинка в PDF даже не встраивается.
+  function tsBuildSigned(origU8, slots, careSig, famSig, famSigs) {
+    var T = window.MetapelTimesheet;
+    var careSlots = slots.filter(function (s) { return s.kind === 'care-day'; });
+    var weekSlots = slots.filter(function (s) { return s.kind === 'family-week'; });
     var p = Promise.resolve(origU8);
-    if (careSig) p = p.then(function (u8) { return window.MetapelTimesheet.stamp(u8, slots, ['care-day'], careSig, {}); });
-    if (famSig) p = p.then(function (u8) { return window.MetapelTimesheet.stamp(u8, slots, ['family-week'], famSig, {}); });
+    if (careSig && careSlots.length) {
+      p = p.then(function (u8) { return T.stamp(u8, careSlots, ['care-day'], careSig, {}); });
+    }
+    if (weekSlots.length && famSigs && famSigs.length) {
+      // строго одна подпись на неделю: «растянуть» последнюю на оставшиеся недели
+      // значило бы вернуть в бланк одинаковые подписи
+      if (famSigs.length < weekSlots.length) {
+        return Promise.reject(new Error('подписей по неделям (' + famSigs.length + ') меньше, чем недель в бланке (' + weekSlots.length + ')'));
+      }
+      p = p.then(function (u8) {
+        return T.stampMulti(u8, weekSlots.map(function (s, i) { return { slot: s, sigDataUrl: famSigs[i] }; }), {});
+      });
+    } else if (weekSlots.length && famSig) {
+      p = p.then(function (u8) { return T.stamp(u8, weekSlots, ['family-week'], famSig, {}); });
+    }
     return p;
   }
 
@@ -967,90 +977,243 @@
       .catch(function (e) { appAlert('Предпросмотр не отрисовался: ' + (e && e.message || e)); });
   }
 
-  function tsSaveSigned(t, signedU8, signer, newSig) {
-    var dataUrl = window.MetapelTimesheet.bytesToDataUrl(signedU8, 'application/pdf');
-    showToast('Сохраняю подписанный табель…');
-    window.MetapelSync.putTimesheetFile(settings, t.id, '-signed', { pdf: dataUrl, fileName: t.fileName, month: t.month }).then(function () {
-      // СОХРАНЯЕМ саму подпись (PNG) в записи — чтобы при следующем подписании
-      // другим человеком пересобрать PDF из исходного + обеих подписей.
-      var patch = {};
-      if (signer === 'caregiver') { patch.caregiverSigned = true; patch.caregiverSignedDate = today(); patch.caregiverSig = newSig; }
-      else { patch.familySigned = true; patch.familySignedDate = today(); patch.familySig = newSig; }
-      S.updateTimesheet(t.id, patch);
-      reloadData();
-      render();
-      showToast('✓ Подпись сохранена');
-      runSync();
-    }).catch(function (e) { appAlert('Не удалось сохранить подписанный табель: ' + (e && e.message || e)); });
+  function tsHasKind(job, kind) {
+    return job.slots.some(function (s) { return s.kind === kind; });
+  }
+  function tsWeekSlots(job) {
+    return job.slots.filter(function (s) { return s.kind === 'family-week'; });
+  }
+  // «1–4 сентября 2026» — рабочие дни недели по бланку (для окна подписи)
+  function tsWeekDaysText(month, days) {
+    if (!days || !days.length) return '';
+    var last = C.fmtDate(month + '-' + ('0' + days[days.length - 1]).slice(-2));
+    return (days.length > 1 ? days[0] + '–' : '') + last;
+  }
+  // подписи бланка по его неделям: i-я неделя получает i-ю подпись серии (серия
+  // собирается по бланку Claims с НАИБОЛЬШИМ числом недель — хватает на любой)
+  function tsSigsForJob(job, sigs) {
+    var ws = tsWeekSlots(job);
+    if (ws.length > sigs.length) throw new Error('подписей по неделям меньше, чем недель в бланке «' + (job.t.fileName || job.t.id) + '»');
+    return ws.map(function (s, i) { return sigs[i]; });
   }
 
-  // ГРУППОВОЕ подписание: подпись рисуется ОДИН раз и штампуется во ВСЕ ещё не
-  // подписанные этой ролью бланки месяца (каждый пересобирается из СВОЕГО
-  // оригинала + обеих подписей — та же логика, что у одиночного tsSign).
+  // Занятость подписания: пока бланки грузятся, собираются и сохраняются, окна на
+  // экране нет и карточка доступна для нажатий — второе нажатие игнорируем, иначе
+  // второй поток перехватил бы окно подписи. Во время открытого окна карточку и
+  // так закрывает затемнение. От «вечной» занятости страхует истечение через минуту.
+  var tsBusyUntil = 0;
+  function tsBusy() { return Date.now() < tsBusyUntil; }
+  function tsSetBusy(on) { tsBusyUntil = on ? Date.now() + 60000 : 0; }
+
+  // Перед пересборкой: свежие записи бланков + подписи из облака для ВСЕХ бланков
+  // месяца. Выгрузка после подписи отдаёт в облако записи месяца целиком, и чужая
+  // подпись (с другого устройства), которой нет в устаревшей локальной записи, была
+  // бы затёрта — в том числе на бланке, который сейчас только отмечается.
+  function tsFreshen(jobs, month) {
+    reloadData();
+    jobs.forEach(function (j) { var f = findTimesheet(j.t.id); if (f) j.t = f; });
+    return tsAdoptCloudSigs(C.timesheetsOfMonth(timesheets, month));
+  }
+
+  var TS_STALE = 'Модуль подписи табелей устарел — в браузере осталась его старая копия. ' +
+    'Нажмите кнопку 🔄 вверху экрана (обновить приложение) и попробуйте снова.';
+
+  // ПОДПИСАНИЕ бланков месяца (одного или пары): каждая роль расписывается один
+  // раз, и подпись штампуется во ВСЕ ещё не подписанные ею бланки; каждый бланк
+  // пересобирается из СВОЕГО оригинала + подписей ЕГО записи. Исключение — бланк
+  // Claims Conference (parsed.claims): метапелет его не подписывает, а Григорий
+  // расписывается ОТДЕЛЬНО за каждую неделю — одинаковые подписи ответственный
+  // за этот бланк не принимает.
   function tsSignGroup(month, signer) {
     if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена) — подпись табеля недоступна. Введите токен в настройках.'); return; }
+    if (tsBusy()) { showToast('Подождите — идёт подписание…'); return; }
     var mates = C.timesheetsOfMonth(timesheets, month);
     var targets = mates.filter(function (t) { return signer === 'caregiver' ? !t.caregiverSigned : !t.familySigned; });
     if (!targets.length) return;
-    showToast('Загружаю бланки…');
+    tsSetBusy(true);
+    showToast(targets.length > 1 ? 'Загружаю бланки…' : 'Загружаю бланк…');
     Promise.all(targets.map(function (t) {
       return window.MetapelSync.fetchTimesheetFile(settings, t.id, '').then(function (obj) {
         var u8 = window.MetapelTimesheet.u8FromDataUrl(obj.pdf);
         return window.MetapelTimesheet.parse(u8).then(function (parsed) {
+          // новый app.js со старым модулем из кэша молча подписал бы Claims по-старому
+          if (typeof parsed.claims !== 'boolean') throw new Error(TS_STALE);
           if (!parsed.slots.length) throw new Error('в бланке «' + (t.fileName || t.id) + '» не нашлось мест для подписи');
-          return { t: t, u8: u8, slots: parsed.slots };
+          return { t: t, u8: u8, slots: parsed.slots, claims: parsed.claims };
         });
       });
     })).then(function (jobs) {
-      var many = jobs.length > 1;
-      var title = signer === 'caregiver' ? '✍ Подпись Метапелет' : '✍ Подпись за Григория';
-      var desc = (signer === 'caregiver'
-        ? 'Распишитесь <b>один раз</b> — синяя подпись Джамшида встанет в каждый рабочий день'
-        : 'Распишитесь <b>один раз</b> за Григория — чёрная недельная подпись встанет на каждую рабочую неделю')
-        + (many ? ' <b>в обоих бланках месяца</b>.' : '.');
-      openFingerSign(title, desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (newSig) {
-        showToast('Расставляю подписи…');
-        // записи дополняются подписями из облака ДО пересборки (анти-гонка)
-        tsAdoptCloudSigs(jobs.map(function (j) { return j.t; })).then(function () {
-          return Promise.all(jobs.map(function (job) {
-            var careSig = signer === 'caregiver' ? newSig : job.t.caregiverSig;
-            var famSig = signer === 'family' ? newSig : job.t.familySig;
-            return tsBuildSigned(job.u8, job.slots, careSig, famSig);
-          }));
-        }).then(function (signedList) {
-          tsShowPreview(signedList[0], function () { tsSaveSignedGroup(jobs, signedList, signer, newSig); },
-            many ? { btnText: '✓ Сохранить оба бланка',
-                     hintText: 'Показан бланк 1 из ' + jobs.length + ' — во втором подписи встанут так же. Затем сохраните.' } : null);
-        }).catch(function (e) { appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
-      }, tsInkColor(signer));
-    }).catch(function (e) { appAlert('Не удалось загрузить/разобрать бланки: ' + (e && e.message || e)); });
+      tsSetBusy(false);
+      if (signer === 'caregiver') tsSignCaregiver(jobs, month);
+      else tsSignFamily(jobs, month);
+    }).catch(function (e) {
+      tsSetBusy(false);
+      var msg = (e && e.message) || String(e);
+      appAlert(msg === TS_STALE ? msg : 'Не удалось загрузить/разобрать бланки: ' + msg);
+    });
   }
 
-  // сохраняет подписанные бланки ПОСЛЕДОВАТЕЛЬНО; при сбое на середине уже
-  // сохранённые остаются (их записи помечены), повторное нажатие подписи
-  // доподпишет только несохранённые бланки
-  function tsSaveSignedGroup(jobs, signedList, signer, newSig) {
+  // Метапелет: одна подпись во все бланки, где есть её места. Бланк без таких мест
+  // (Claims) только отмечается пройденным — без картинки и без пересборки файла.
+  function tsSignCaregiver(jobs, month) {
+    var stampJobs = jobs.filter(function (j) { return tsHasKind(j, 'care-day'); });
+    var flagJobs = jobs.filter(function (j) { return !tsHasKind(j, 'care-day'); });
+    function flagPatch(j) { return { caregiverSigned: true, caregiverSignedDate: today(), claims: j.claims }; }
+    if (!stampJobs.length) {
+      appConfirm('В бланке Claims Conference подпись метапелет не ставится. Отметить этот шаг как выполненный?', '✓ Отметить', function () {
+        if (tsBusy()) return;
+        tsSetBusy(true);
+        // и здесь сперва облако: отметка уходит в облако вместе с записями месяца
+        tsFreshen(jobs, month).then(function () {
+          flagJobs.forEach(function (j) { S.updateTimesheet(j.t.id, flagPatch(j)); });
+          tsSetBusy(false);
+          reloadData();
+          render();
+          showToast('✓ Отмечено');
+          runSync();
+        });
+      });
+      return;
+    }
+    var desc = 'Распишитесь <b>один раз</b> — синяя подпись Джамшида встанет в каждый рабочий день' +
+      (stampJobs.length > 1 ? ' <b>в обоих бланках месяца</b>.' : '.') +
+      (flagJobs.length ? '<br>В бланк Claims Conference подпись метапелет не ставится.' : '');
+    openFingerSign('✍ Подпись Метапелет', desc, '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».', function (newSig) {
+      tsSetBusy(true);
+      showToast('Расставляю подписи…');
+      tsFreshen(jobs, month).then(function () {
+        return Promise.all(stampJobs.map(function (job) {
+          return tsBuildSigned(job.u8, job.slots, newSig, job.t.familySig, job.t.familySigs);
+        }));
+      }).then(function (signedList) {
+        var all = stampJobs.concat(flagJobs);
+        var files = signedList.concat(flagJobs.map(function () { return null; }));
+        var patches = all.map(function (j, i) {
+          return i < stampJobs.length
+            ? { caregiverSigned: true, caregiverSignedDate: today(), caregiverSig: newSig, claims: j.claims }
+            : flagPatch(j);
+        });
+        tsSetBusy(false);
+        tsShowPreview(signedList[0], function () { tsSaveSignedGroup(all, files, patches); },
+          all.length > 1 ? {
+            btnText: '✓ Сохранить оба бланка',
+            hintText: stampJobs.length > 1
+              ? 'Показан бланк 1 из ' + stampJobs.length + ' — во втором подписи встанут так же. Затем сохраните.'
+              : 'Показан бланк с подписью метапелет; в бланк Claims Conference она не ставится. Затем сохраните.'
+          } : null);
+      }).catch(function (e) { tsSetBusy(false); appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
+    }, tsInkColor('caregiver'));
+  }
+
+  // Григорий: обычный бланк — одна подпись во все недели (как раньше). Если среди
+  // бланков есть Claims — подписи собираются ПО ОДНОЙ на каждую его неделю; первая
+  // из них встаёт и во все недели обычного бланка (не расписываться лишний раз).
+  function tsSignFamily(jobs, month) {
+    var claimsJob = null;
+    jobs.forEach(function (j) {
+      if (j.claims && (!claimsJob || tsWeekSlots(j).length > tsWeekSlots(claimsJob).length)) claimsJob = j;
+    });
+    var weeks = claimsJob ? tsWeekSlots(claimsJob) : [];
+
+    function finish(sigs) {
+      tsSetBusy(true);
+      showToast('Расставляю подписи…');
+      tsFreshen(jobs, month).then(function () {
+        return Promise.all(jobs.map(function (job) {
+          return tsBuildSigned(job.u8, job.slots, job.t.caregiverSig, sigs[0],
+            job.claims ? tsSigsForJob(job, sigs) : null);
+        }));
+      }).then(function (signedList) {
+        var patches = jobs.map(function (job) {
+          var patch = { familySigned: true, familySignedDate: today(), familySig: sigs[0], claims: job.claims };
+          if (job.claims) {
+            patch.familySigs = tsSigsForJob(job, sigs);
+            // метапелет этот бланк не подписывает — его шаг отмечаем пройденным сразу:
+            // так и устаревшая вкладка (старая версия) не возьмёт бланк «на подпись
+            // метапелет» и не пересоберёт его с одной подписью во всех неделях
+            if (!job.t.caregiverSigned) { patch.caregiverSigned = true; patch.caregiverSignedDate = today(); }
+          }
+          return patch;
+        });
+        var opts = null;
+        if (claimsJob) {
+          opts = { btnText: jobs.length > 1 ? '✓ Сохранить оба бланка' : null,
+            hintText: 'Показан бланк Claims Conference: в каждой неделе — своя подпись.' +
+              (jobs.length > 1 ? ' В другом бланке подпись недели 1 встанет во все недели.' : '') + ' Затем сохраните.' };
+        } else if (jobs.length > 1) {
+          opts = { btnText: '✓ Сохранить оба бланка',
+            hintText: 'Показан бланк 1 из ' + jobs.length + ' — во втором подписи встанут так же. Затем сохраните.' };
+        }
+        tsSetBusy(false);
+        tsShowPreview(signedList[claimsJob ? jobs.indexOf(claimsJob) : 0],
+          function () { tsSaveSignedGroup(jobs, signedList, patches); }, opts);
+      }).catch(function (e) { tsSetBusy(false); appAlert('Ошибка расстановки подписи: ' + (e && e.message || e)); });
+    }
+
+    if (!weeks.length) {
+      openFingerSign('✍ Подпись за Григория',
+        'Распишитесь <b>один раз</b> за Григория — чёрная недельная подпись встанет на каждую рабочую неделю' +
+          (jobs.length > 1 ? ' <b>в обоих бланках месяца</b>.' : '.'),
+        '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».',
+        function (sig) { finish([sig]); }, tsInkColor('family'));
+      return;
+    }
+    // серия окон «неделя 1 из N», «2 из N», … «Прервать» в любом окне отменяет
+    // ВСЮ серию — ничего не сохраняется, можно начать заново
+    var sigs = [];
+    function ask(k) {
+      var n = weeks.length;
+      openFingerSign('✍ Подпись Григория — неделя ' + (k + 1) + ' из ' + n,
+        'Для бланка Claims Conference нужна <b>отдельная подпись за каждую неделю</b>.<br>' +
+          'Сейчас — неделя ' + (k + 1) + ': <b>' + esc(tsWeekDaysText(month, weeks[k].days)) + '</b>.' +
+          (k === 0 && jobs.length > 1 ? '<br>Эта подпись встанет и во все недели другого бланка.' : ''),
+        k + 1 < n ? '✓ Готово — дальше неделя ' + (k + 2) : '✓ Готово',
+        'Распишитесь пальцем в рамке и нажмите «Готово».',
+        function (sig) {
+          sigs.push(sig);
+          if (k + 1 < n) {
+            showToast('✓ Неделя ' + (k + 1) + ' из ' + n + ' подписана');
+            // следующая неделя — сразу, без паузы: в паузе окна нет и карточка под
+            // ним открыта для случайного нажатия; двойное касание «Готово» гасит
+            // щит от касаний (0,5 с после закрытия окна)
+            ask(k + 1);
+          } else {
+            finish(sigs);
+          }
+        }, tsInkColor('family'));
+      // в серии эта кнопка выбрасывает и уже подписанные недели — так и назовём
+      $('#sign-later').textContent = 'Прервать (все недели — заново)';
+    }
+    ask(0);
+  }
+
+  // Сохраняет бланки ПОСЛЕДОВАТЕЛЬНО: files[i] — пересобранный PDF (null — только
+  // отметка в записи, без файла), patches[i] — поля записи. При сбое на середине
+  // уже сохранённые остаются (их записи помечены); повторное нажатие подписи
+  // доподпишет только несохранённые бланки.
+  function tsSaveSignedGroup(jobs, files, patches) {
+    tsSetBusy(true);
     showToast('Сохраняю подписанные бланки…');
     var i = 0;
     function next() {
       if (i >= jobs.length) {
+        tsSetBusy(false);
         reloadData();
         render();
-        showToast('✓ Подпись сохранена' + (jobs.length > 1 ? ' в оба бланка' : ''));
+        showToast(jobs.length > 1 ? '✓ Подписи сохранены' : '✓ Подпись сохранена');
         runSync();
         return;
       }
-      var job = jobs[i], signedU8 = signedList[i];
+      var job = jobs[i], signedU8 = files[i], patch = patches[i];
       i++;
+      if (!signedU8) { S.updateTimesheet(job.t.id, patch); next(); return; }
       var dataUrl = window.MetapelTimesheet.bytesToDataUrl(signedU8, 'application/pdf');
       window.MetapelSync.putTimesheetFile(settings, job.t.id, '-signed',
         { pdf: dataUrl, fileName: job.t.fileName, month: job.t.month }).then(function () {
-        var patch = {};
-        if (signer === 'caregiver') { patch.caregiverSigned = true; patch.caregiverSignedDate = today(); patch.caregiverSig = newSig; }
-        else { patch.familySigned = true; patch.familySignedDate = today(); patch.familySig = newSig; }
         S.updateTimesheet(job.t.id, patch);
         next();
       }).catch(function (e) {
+        tsSetBusy(false);
         reloadData();
         render();
         runSync();
@@ -1067,7 +1230,7 @@
     var t = findTimesheet(id);
     if (!t) return;
     if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена).'); return; }
-    var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
+    var suffix = tsHasSignedFile(t) ? '-signed' : '';
     showToast('Готовлю файл…');
     window.MetapelSync.fetchTimesheetFile(settings, id, suffix).then(function (obj) {
       var u8 = window.MetapelTimesheet.u8FromDataUrl(obj.pdf);
@@ -1154,7 +1317,7 @@
           '<div dir="rtl" style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.7;color:#1f2937;">' +
             '<p>לכבוד מטב,</p>' +
             '<p>מצורפים בזאת <b>שני יומני עבודה חתומים</b> עבור המטופל <b>גריגורי רזומובסקי</b> לתקופה <b>' + monthSlash + '</b>.</p>' +
-            '<p>היומנים חתומים על ידי המטפל ועל ידי בן המשפחה.</p>' +
+            '<p>היומנים חתומים כנדרש.</p>' +
             '<p>נא לאשר את קבלת המסמכים. תודה רבה.</p>' +
             '<p style="margin-top:18px;">בברכה,<br>משפחת רזומובסקי</p>' +
           '</div>';
@@ -1233,7 +1396,7 @@
         ' письмом в Матав?\n\nКому: ' + toList.join(', ');
     appConfirm(confirmMsg, isTest ? '🧪 Отправить тест' : (already ? '📧 Отослать повторно' : '📧 Отправить'), function () {
       showToast('Готовлю и отправляю…');
-      var suffix = (t.caregiverSigned || t.familySigned) ? '-signed' : '';
+      var suffix = tsHasSignedFile(t) ? '-signed' : '';
       window.MetapelSync.fetchTimesheetFile(settings, id, suffix).then(function (obj) {
         // Динамическое вложение EmailJS («Variable Attachment») ждёт в параметре
         // content URI — data:URL вида data:application/pdf;base64,... (а НЕ «сырой»
@@ -1251,7 +1414,7 @@
           '<div dir="rtl" style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.7;color:#1f2937;">' +
             '<p>לכבוד מטב,</p>' +
             '<p>מצורף בזאת <b>יומן עבודה חתום</b> עבור המטופל <b>גריגורי רזומובסקי</b> לתקופה <b>' + monthSlash + '</b>.</p>' +
-            '<p>היומן חתום על ידי המטפל ועל ידי בן המשפחה.</p>' +
+            '<p>היומן חתום כנדרש.</p>' +
             '<p>נא לאשר את קבלת המסמך. תודה רבה.</p>' +
             '<p style="margin-top:18px;">בברכה,<br>משפחת רזומובסקי</p>' +
           '</div>';
@@ -1643,6 +1806,7 @@
     $('#sign-title').textContent = title;
     $('#sign-text').innerHTML = descHtml || '';
     $('#sign-ok').textContent = okText || '✓ Готово';
+    $('#sign-later').textContent = 'Позже (расписаться потом)'; // серия недель переименует после вызова
     var hint = $('#sign-hint'); if (hint) hint.textContent = hintText || 'Распишитесь пальцем в рамке выше и нажмите кнопку.';
     $('#modal-sign').classList.add('open');
     updateScrollLock();
@@ -1685,6 +1849,7 @@
     // вернуть «расписочные» подписи модалки (табели могли их поменять)
     $('#sign-title').textContent = '✍ Расписка о получении';
     $('#sign-ok').textContent = '✓ ОК — деньги получил';
+    $('#sign-later').textContent = 'Позже (расписаться потом)';
     var h = $('#sign-hint'); if (h) h.textContent = 'Метапель: распишитесь пальцем в рамке выше и нажмите ОК.';
     var what = 'наличными'; // обычный платёж
     if (r.kind === 'gift') what = 'в подарок';
@@ -2433,8 +2598,10 @@
       return;
     }
     showToast('🔄 Обновляю…');
+    // ВСЕ свои скрипты, включая модуль подписи табелей: иначе новый app.js
+    // мог бы работать со старым парсером из HTTP-кэша (Pages: max-age=600)
     var SHELL = ['index.html', 'css/styles.css', 'js/env.js', 'js/calc.js',
-      'js/storage.js', 'js/sync.js', 'js/app.js', 'manifest.json'];
+      'js/storage.js', 'js/sync.js', 'js/timesheet-sign.js', 'js/app.js', 'manifest.json'];
     var fam = (window.MetapelEnv && window.MetapelEnv.cacheFamily) || 'metapel-shell-';
     function clearCaches() {
       if (!(window.caches && caches.keys)) return Promise.resolve();
@@ -2706,14 +2873,19 @@
         var fallbackMonth = C.parseISO(today()).getFullYear() + '-' +
           ('0' + (C.parseISO(today()).getMonth() + 1)).slice(-2);
         showToast('Читаю период бланка…');
-        window.MetapelTimesheet.parseMonth(window.MetapelTimesheet.u8FromDataUrl(dataUrl))
-          .catch(function () { return null; })
-          .then(function (parsedMonth) {
+        var pdfU8 = window.MetapelTimesheet.u8FromDataUrl(dataUrl);
+        Promise.all([
+          window.MetapelTimesheet.parseMonth(pdfU8).catch(function () { return null; }),
+          // бланк Claims Conference помечаем сразу — на карточке видно ДО подписания
+          window.MetapelTimesheet.parse(pdfU8).then(function (p) { return p.claims; }).catch(function () { return null; })
+        ]).then(function (res) {
+            var parsedMonth = res[0], claims = res[1];
             var month = parsedMonth || fallbackMonth;
             var id = 'ts-' + Date.now();
             var rec = { id: id, month: month, fileName: file.name, uploadedDate: today(),
               caregiverSigned: false, caregiverSignedDate: null, familySigned: false,
               familySignedDate: null, sentMarked: false, sentDate: null };
+            if (typeof claims === 'boolean') rec.claims = claims;
             S.addTimesheet(rec);
             reloadData();
             render();

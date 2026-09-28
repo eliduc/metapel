@@ -135,14 +135,26 @@ window.MetapelTimesheet = (function () {
       if (/^שם$/.test(it.s) && it.x > 470) famName = it;                         // имя/подпись семьи
     });
 
+    // Бланк Claims Conference («אל קרן נפגעי שואה», с 08/2026 — второй бланк
+    // месяца): ответственный за него НЕ требует подписи метапелет и НЕ принимает
+    // одинаковые недельные подписи. Поэтому в нём нет care-day слотов, а каждая
+    // неделя подписывается ОТДЕЛЬНОЙ живой подписью (сбор — в app.js).
+    // Ищем только в ШАПКЕ (выше таблицы — там адресат «אל …»): те же слова в
+    // примечаниях под таблицей обычного бланка не должны отнимать места метапелет.
+    var claims = items.some(function (it) {
+      return it.y > headerY + 10 && /נפגעי שואה|ועידת התביעות|claims\s*conference/i.test(it.s);
+    });
+
     // ДВА столбца подписи = ДВА подписанта (как в образце):
-    //   חתימת המטפלת (careX)  — метапелет, в КАЖДЫЙ рабочий день;
+    //   חתימת המטפלת (careX)  — метапелет, в КАЖДЫЙ рабочий день (кроме Claims);
     //   חתימה שבועית (weekX) — Григорий (член семьи), ОДНА подпись на неделю.
     // Плюс нижние блоки: אישור המטפל/ת (метапелет) и בן/בת משפחה (Григорий).
     var slots = [];
-    work.forEach(function (r) {
-      slots.push({ kind: 'care-day', cx: careX, cy: r.y + 2, w: 46, h: 11, label: 'метапелет — день ' + r.num });
-    });
+    if (!claims) {
+      work.forEach(function (r) {
+        slots.push({ kind: 'care-day', cx: careX, cy: r.y + 2, w: 46, h: 11, label: 'метапелет — день ' + r.num });
+      });
+    }
     // недельные группы (новая начинается с воскресенья ראשון или с первой строки);
     // Григорий расписывается ОДИН раз на каждую неделю, где есть рабочие дни,
     // по центру строк этой недели в столбце חתימה שבועית.
@@ -157,7 +169,10 @@ window.MetapelTimesheet = (function () {
       wk++;
       var ys = w.rows.map(function (r) { return r.y; });
       var cy = (Math.max.apply(null, ys) + Math.min.apply(null, ys)) / 2;
-      slots.push({ kind: 'family-week', cx: weekX, cy: cy + 2, w: 46, h: 18, label: 'Григорий — неделя ' + wk });
+      // days — рабочие дни недели: по ним окно подписи называет, ЗА КАКУЮ неделю
+      // расписываться (Claims: отдельная подпись на каждую неделю)
+      slots.push({ kind: 'family-week', cx: weekX, cy: cy + 2, w: 46, h: 18, label: 'Григорий — неделя ' + wk,
+        week: wk, days: w.rows.filter(function (r) { return r.hours > 0; }).map(function (r) { return r.num; }) });
     });
     // НИЖНИЕ блоки подтверждения (אишур המטפл/ת, בн/бт משפחה) и дату НЕ заполняем:
     // Григорий расписывается сам, нижние подписи не нужны (по требованию пользователя).
@@ -166,11 +181,12 @@ window.MetapelTimesheet = (function () {
     return {
       slots: slots,
       workDays: work.map(function (r) { return r.num; }),
-      careDateAt: null
+      careDateAt: null,
+      claims: claims
     };
   }
 
-  // Парсит PDF (Uint8Array) первой страницы -> {slots, workDays, careDateAt}.
+  // Парсит PDF (Uint8Array) первой страницы -> {slots, workDays, careDateAt, claims}.
   // pdf.js МОЖЕТ забрать (detach) переданный буфер в воркер — отдаём КОПИЮ
   // (.slice(0)), иначе исходный baseU8 «опустеет» и pdf-lib потом скажет
   // «No PDF header found» при штамповке того же массива.

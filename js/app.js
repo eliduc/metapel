@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.11 от 28.09.2026 (Бланк Claims Conference: без подписи метапелет; Григорий расписывается отдельно за каждую неделю)';
+  var APP_VERSION = '6.11.1 от 28.09.2026 (Claims: защита от случайного касания и неверно подписанного бланка при отправке; Джамшида бланк Claims не касается)';
 
   // ---------- «сегодня» ----------
 
@@ -761,7 +761,9 @@
 
     var acts = el('div', 'ts-actions');
     if (st !== 'sent') {
-      if (!t.caregiverSigned) {
+      // бланк Claims метапелет не подписывает вообще — кнопки для него нет (его шаг
+      // отмечается сам при подписи Григория)
+      if (!t.caregiverSigned && t.claims !== true) {
         acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay', function () { tsSignGroup(t.month, 'caregiver'); }));
       }
       if (!t.familySigned) {
@@ -813,7 +815,7 @@
       // сколько раз расписываться, объясняет само окно подписи: метапелет — один
       // раз (в бланк Claims его подпись не ставится), Григорий — один раз, а для
       // бланка Claims — отдельно за каждую неделю
-      if (mates.some(function (t) { return !t.caregiverSigned; })) {
+      if (mates.some(function (t) { return !t.caregiverSigned && t.claims !== true; })) {
         acts.appendChild(tsBtn('✍ Подписать Метапелет', 'btn-pay',
           function () { tsSignGroup(month, 'caregiver'); }));
       }
@@ -907,8 +909,10 @@
         if (!c) return;
         var patch = {};
         if (!t.caregiverSig && c.caregiverSig) patch.caregiverSig = c.caregiverSig;
-        // отметку берём и БЕЗ картинки: бланк Claims метапелет только отмечает
-        if (!t.caregiverSigned && c.caregiverSigned) {
+        // отметку берём и БЕЗ картинки — но только у бланка Claims (метапелет его
+        // лишь отмечает); обычный бланк с флагом без картинки пересобрался бы без
+        // подписи метапелет при статусе «полностью подписан»
+        if (!t.caregiverSigned && c.caregiverSigned && (c.caregiverSig || c.claims === true)) {
           patch.caregiverSigned = true;
           patch.caregiverSignedDate = c.caregiverSignedDate || today();
         }
@@ -1011,8 +1015,31 @@
   // бы затёрта — в том числе на бланке, который сейчас только отмечается.
   function tsFreshen(jobs, month) {
     reloadData();
-    jobs.forEach(function (j) { var f = findTimesheet(j.t.id); if (f) j.t = f; });
+    for (var i = 0; i < jobs.length; i++) {
+      var f = findTimesheet(jobs[i].t.id);
+      // бланк удалили (на другом устройстве) прямо во время подписания
+      if (!f) return Promise.reject(new Error('бланк «' + (jobs[i].t.fileName || jobs[i].t.id) + '» удалён — подписание отменено'));
+      jobs[i].t = f;
+    }
     return tsAdoptCloudSigs(C.timesheetsOfMonth(timesheets, month));
+  }
+
+  var TS_NO_CLAIMS = 'В этом месяце два бланка, но бланк Claims Conference не распознан ' +
+    '(возможно, Матав изменил бланк). Подписывать не буду, чтобы не ошибиться, — сообщите Льву.';
+
+  // Последний рубеж перед отправкой в Матав: бланк Claims, подписанный НЕ так, как
+  // требует его ответственный (старой версией приложения, по ошибке), не уходит.
+  function tsClaimsProblem(t) {
+    if (!t || t.claims !== true) return null;
+    if (t.caregiverSig) return 'в нём стоит подпись метапелет';
+    var fs = t.familySigs || [];
+    if (!fs.length) return 'в нём одна подпись Григория на все недели';
+    var seen = {};
+    for (var i = 0; i < fs.length; i++) {
+      if (seen[fs[i]]) return 'в нём одинаковые подписи Григория в разных неделях';
+      seen[fs[i]] = true;
+    }
+    return null;
   }
 
   var TS_STALE = 'Модуль подписи табелей устарел — в браузере осталась его старая копия. ' +
@@ -1043,13 +1070,18 @@
         });
       });
     })).then(function (jobs) {
+      // два бланка, а Claims среди них не распознан (ни сейчас, ни раньше) —
+      // подпись «по-старому» Claims отклонит; лучше остановиться
+      var anyClaims = jobs.some(function (j) { return j.claims; }) ||
+        mates.some(function (m) { return m.claims === true; });
+      if (mates.length >= 2 && !anyClaims) throw new Error(TS_NO_CLAIMS);
       tsSetBusy(false);
       if (signer === 'caregiver') tsSignCaregiver(jobs, month);
       else tsSignFamily(jobs, month);
     }).catch(function (e) {
       tsSetBusy(false);
       var msg = (e && e.message) || String(e);
-      appAlert(msg === TS_STALE ? msg : 'Не удалось загрузить/разобрать бланки: ' + msg);
+      appAlert(msg === TS_STALE || msg === TS_NO_CLAIMS ? msg : 'Не удалось загрузить/разобрать бланки: ' + msg);
     });
   }
 
@@ -1061,7 +1093,7 @@
     function flagPatch(j) { return { caregiverSigned: true, caregiverSignedDate: today(), claims: j.claims }; }
     if (!stampJobs.length) {
       appConfirm('В бланке Claims Conference подпись метапелет не ставится. Отметить этот шаг как выполненный?', '✓ Отметить', function () {
-        if (tsBusy()) return;
+        if (tsBusy()) { showToast('Подождите — идёт подписание…'); return; }
         tsSetBusy(true);
         // и здесь сперва облако: отметка уходит в облако вместе с записями месяца
         tsFreshen(jobs, month).then(function () {
@@ -1071,7 +1103,7 @@
           render();
           showToast('✓ Отмечено');
           runSync();
-        });
+        }).catch(function (e) { tsSetBusy(false); appAlert('Не удалось отметить: ' + (e && e.message || e)); });
       });
       return;
     }
@@ -1170,6 +1202,13 @@
         k + 1 < n ? '✓ Готово — дальше неделя ' + (k + 2) : '✓ Готово',
         'Распишитесь пальцем в рамке и нажмите «Готово».',
         function (sig) {
+          // живая роспись двух недель точь-в-точь не совпадает — это одинаковые
+          // касания; такую неделю просим подписать ещё раз
+          if (sigs.indexOf(sig) >= 0) {
+            appAlert('Эта подпись точь-в-точь совпадает с подписью другой недели. Распишитесь за эту неделю ещё раз.');
+            ask(k);
+            return;
+          }
           sigs.push(sig);
           if (k + 1 < n) {
             showToast('✓ Неделя ' + (k + 1) + ' из ' + n + ' подписана');
@@ -1273,10 +1312,22 @@
   // isTest: письмо уходит ТОЛЬКО на «тестового получателя» из настроек, тема с
   // пометкой [ТЕСТ], статус «отослано» НЕ ставится — проверка вложений перед
   // боевым письмом в Матав (ошибки отправки табелей уже случались).
+  function tsClaimsBlockText(n, prob) {
+    return 'Бланк ' + (n ? n + ' ' : '') + '(Claims Conference) подписан не так, как требуется: ' + prob + '. ' +
+      'В Матав не отправляю. Как исправить: обновите приложение (🔄), удалите этот бланк кнопкой «🗑 Удалить бланк» ' +
+      'и загрузите его PDF заново — затем Григорий подпишет его по неделям.';
+  }
+
   function tsSendGroup(month, isTest) {
     var mates = C.timesheetsOfMonth(timesheets, month);
     if (mates.length > 2) { appAlert('Поддерживается не больше двух бланков в месяце (в письме два вложения).'); return; }
     if (mates.length < 2) { if (mates.length === 1) tsSend(mates[0].id, isTest); return; }
+    if (!isTest) {
+      for (var qi = 0; qi < mates.length; qi++) {
+        var prob = tsClaimsProblem(mates[qi]);
+        if (prob) { appAlert(tsClaimsBlockText(qi + 1, prob)); return; }
+      }
+    }
     var ej = settings.emailjs || {};
     if (!ej.serviceId || !ej.templateId || !ej.publicKey || (!isTest && !ej.recipient)) {
       appAlert('Авто-отправка (EmailJS) не настроена. Зайдите в Настройки → «Отправка в Матав (EmailJS)» и заполните поля. Либо скачайте оба подписанных PDF, отправьте письмом вручную и отметьте «Отослано».');
@@ -1367,6 +1418,8 @@
   function tsSendEmail(id, isTest) {
     var t = findTimesheet(id);
     if (!t) return;
+    var prob = isTest ? null : tsClaimsProblem(t);
+    if (prob) { appAlert(tsClaimsBlockText(0, prob)); return; }
     var ej = settings.emailjs || {};
     if (!ej.serviceId || !ej.templateId || !ej.publicKey || (!isTest && !ej.recipient)) {
       appAlert('Авто-отправка (EmailJS) не настроена. Зайдите в Настройки → «Отправка в Матав (EmailJS)» и заполните поля. Либо нажмите «Скачать подписанный PDF», отправьте письмом вручную и отметьте «Отослано».');
@@ -1809,12 +1862,33 @@
     $('#sign-later').textContent = 'Позже (расписаться потом)'; // серия недель переименует после вызова
     var hint = $('#sign-hint'); if (hint) hint.textContent = hintText || 'Распишитесь пальцем в рамке выше и нажмите кнопку.';
     $('#modal-sign').classList.add('open');
+    // окно открывается с ВЕРХА: в серии недель прокрутка от прошлого окна иначе
+    // спрятала бы заголовок «неделя k из N» с датами (на небольших экранах)
+    var box = document.querySelector('#modal-sign .modal-box'); if (box) box.scrollTop = 0;
     updateScrollLock();
     setupSignCanvas(true, signColor);
   }
 
   // Обрезает подпись до рамки чернил (+поля) — чтобы в маленькой ячейке бланка
   // подпись заполняла место и была видна, а не превращалась в точку.
+  // размер росчерка на холсте (рамка непрозрачных пикселей) или null, если пусто
+  function signInkBox(canvas) {
+    try {
+      var w = canvas.width, h = canvas.height;
+      var d = canvas.getContext('2d').getImageData(0, 0, w, h).data;
+      var minX = w, minY = h, maxX = -1, maxY = -1;
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          if (d[(y * w + x) * 4 + 3] > 16) {
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+          }
+        }
+      }
+      return maxX < 0 ? null : { w: maxX - minX + 1, h: maxY - minY + 1 };
+    } catch (e) { return null; }
+  }
+
   function trimSignature(canvas) {
     try {
       var w = canvas.width, h = canvas.height;
@@ -1898,6 +1972,13 @@
     if (!signInk) { appAlert('Сначала распишитесь пальцем в рамке.'); return; }
     // режим табелей: вернуть PNG в колбэк, обычную «расписочную» логику пропускаем
     if (signCallback) {
+      // случайное касание (точка) — не подпись: в бланке оно стало бы «подписью» недели
+      var ink = signInkBox($('#sign-canvas'));
+      if (ink && Math.max(ink.w, ink.h) < 40) {
+        appAlert('Подпись получилась слишком маленькой — похоже на случайное касание. ' +
+          'Нажмите «Стереть и расписаться заново» и распишитесь полностью.');
+        return;
+      }
       var data = trimSignature($('#sign-canvas'));
       var cb = signCallback; signCallback = null;
       closeModals();

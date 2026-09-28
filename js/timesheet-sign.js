@@ -142,7 +142,7 @@ window.MetapelTimesheet = (function () {
     // Ищем только в ШАПКЕ (выше таблицы — там адресат «אל …»): те же слова в
     // примечаниях под таблицей обычного бланка не должны отнимать места метапелет.
     var claims = items.some(function (it) {
-      return it.y > headerY + 10 && /נפגעי שואה|ועידת התביעות|claims\s*conference/i.test(it.s);
+      return it.y > headerY + 10 && /נפגעי\s+שואה|ועידת\s+התביעות|claims\s*conference/i.test(it.s);
     });
 
     // ДВА столбца подписи = ДВА подписанта (как в образце):

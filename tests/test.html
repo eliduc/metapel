@@ -511,6 +511,149 @@
     eq('computeSlots: адресат «אל ועידת התביעות» — тоже Claims', TSG.computeSlots(tsItems('אל ועידת התביעות')).claims, true);
     eq('computeSlots: адресат «Claims Conference» латиницей — тоже Claims', TSG.computeSlots(tsItems('To: Claims Conference')).claims, true);
 
+    // ---------- подписи табелей: запись + файл архива timesheets/<id>-sigs.json (v6.13) ----------
+    var PA = 'data:image/png;base64,AAA', PB = 'data:image/png;base64,BBB', PC = 'data:image/png;base64,CCC';
+    var D1 = 'data:image/png;base64,D1', D2 = 'data:image/png;base64,D2', D3 = 'data:image/png;base64,D3';
+    var W1 = 'data:image/png;base64,W1', W2 = 'data:image/png;base64,W2';
+    function oldKey(spec) { // tsSigKey из app.js v6.12 — новый отпечаток обязан совпасть
+      var s = (spec.cares ? spec.cares.join('|') : (spec.care || '')) + '#' + (spec.fams ? spec.fams.join('|') : (spec.fam || ''));
+      return 'v2:' + s.length + ':' + C.hashString(s);
+    }
+    function applyPatch(rec, p) { // как S.updateTimesheet + сохранение в localStorage
+      var o = clone(rec); for (var k in p) if (p.hasOwnProperty(k)) o[k] = p[k];
+      return JSON.parse(JSON.stringify(o));
+    }
+    var legClaims = { id: 'ts-9', month: '2026-09', claims: true,
+      caregiverSigned: true, caregiverSignedDate: '2026-10-01', caregiverSig: D1, caregiverSigs: [D1, D2, D3],
+      familySigned: true, familySignedDate: '2026-10-02', familySig: W1, familySigs: [W1, W2] };
+    var legReg = { id: 'ts-8', month: '2026-09', claims: false,
+      caregiverSigned: true, caregiverSignedDate: '2026-10-01', caregiverSig: PA,
+      familySigned: true, familySignedDate: '2026-10-02', familySig: PB };
+
+    // правило «подписано по местам» — по счётчикам, со старыми массивами
+    eq('Claims: счётчики по местам (картинки в архиве) → full',
+      tss({ claims: true, caregiverSigned: true, caregiverSigsN: 21, familySigned: true, familySigsN: 5 }), 'full');
+    eq('Claims: счётчик 0 → роль не засчитана', C.timesheetCareDone({ claims: true, caregiverSigned: true, caregiverSigsN: 0 }), false);
+    eq('Claims: старый массив в записи (без счётчика) по-прежнему засчитан', C.timesheetFamilyDone({ claims: true, familySigned: true, familySigs: [W1] }), true);
+    eq('счётчик: массив в записи (дописан старой версией) важнее счётчика',
+      C.timesheetSigsCount({ caregiverSigs: [D1, D2], caregiverSigsN: 21 }, 'care'), 2);
+    eq('счётчик: ни массива, ни счётчика → 0', C.timesheetSigsCount({}, 'fam'), 0);
+
+    // отпечаток — формат v6.12 (им помечены уже собранные -signed)
+    var effLegC = C.timesheetSigsEffective(legClaims, null), effLegR = C.timesheetSigsEffective(legReg, null);
+    eq('sigKey: Claims = ключ v6.12', C.timesheetSigKey(C.timesheetSigSpec(effLegC, true)),
+      oldKey({ cares: legClaims.caregiverSigs, fams: legClaims.familySigs }));
+    eq('sigKey: обычный бланк = ключ v6.12', C.timesheetSigKey(C.timesheetSigSpec(effLegR, false)), oldKey({ care: PA, fam: PB }));
+    eq('sigKey: Claims без подписей Григория = ключ v6.12',
+      C.timesheetSigKey(C.timesheetSigSpec(C.timesheetSigsEffective({ claims: true, caregiverSigs: [D1] }, null), true)),
+      oldKey({ cares: [D1], fams: undefined }));
+    eq('sigKey: у Claims одиночная подпись Григория в бланк не идёт (как в v6.12)',
+      C.timesheetSigSpec(C.timesheetSigsEffective({ claims: true, familySig: W1 }, null), true).fams, undefined);
+
+    // перенос подписей в файл: из записи уходят картинки, ничего не теряется
+    var fileC = JSON.parse(JSON.stringify(C.timesheetSigsFile(legClaims, effLegC)));
+    var lightC = applyPatch(legClaims, C.timesheetSigsLight(effLegC, true));
+    eq('перенос: в записи не осталось картинок', JSON.stringify(lightC).indexOf('data:image') < 0, true);
+    eq('перенос: метки вместо одиночных подписей', [lightC.caregiverSig, lightC.familySig], [C.TS_SIG_MARK, C.TS_SIG_MARK]);
+    eq('перенос: счётчики по местам + отметка переноса', [lightC.caregiverSigsN, lightC.familySigsN, lightC.sigsArchived], [3, 2, true]);
+    var MK = C.TS_SIG_MARK;
+    function mk(n) { var a = []; for (var i = 1; i <= n; i++) a.push(MK + '#' + i); return a; }
+    eq('перенос: вместо массивов — заглушки (не картинки) по числу мест', [lightC.caregiverSigs, lightC.familySigs], [mk(3), mk(2)]);
+    // как увидит перенесённую запись v6.12 (её правила — копией из HEAD): роли
+    // подписаны; дублей нет (совета «удалите бланк» не будет); отпечаток из заглушек
+    // не совпадёт с файлом -signed — отправку она остановит, а пересобрать не сможет
+    function v612Done(rec, a, f) { return !!(rec && rec[f] && (rec.claims !== true || (rec[a] && rec[a].length))); }
+    function v612Dup(arr) { var seen = {}; for (var i = 0; i < arr.length; i++) { if (seen[arr[i]]) return true; seen[arr[i]] = true; } return false; }
+    eq('v6.12 на перенесённой записи: обе роли Claims подписаны (переподписать не предложит)',
+      [v612Done(lightC, 'caregiverSigs', 'caregiverSigned'), v612Done(lightC, 'familySigs', 'familySigned')], [true, true]);
+    eq('v6.12 на перенесённой записи: «одинаковых подписей» нет (не посоветует удалить бланк)', [v612Dup(lightC.caregiverSigs), v612Dup(lightC.familySigs)], [false, false]);
+    eq('v6.12 на перенесённой записи: её отпечаток ≠ отпечатку файла → отправка остановлена',
+      oldKey({ cares: lightC.caregiverSigs, fams: lightC.familySigs }) !== lightC.sigKey, true);
+    eq('заглушки — не картинки: в бланк их не вставить, переносить из записи нечего', C.timesheetHasRecordSigs(lightC), false);
+    eq('перенос: статус записи не изменился', [tss(legClaims), tss(lightC)], ['full', 'full']);
+    var backC = C.timesheetSigsEffective(lightC, fileC);
+    eq('перенос: запись + файл дают те же подписи (без потерь)',
+      [backC.care.sig, backC.care.sigs, backC.fam.sig, backC.fam.sigs], [D1, [D1, D2, D3], W1, [W1, W2]]);
+    eq('перенос: отпечаток в записи = отпечаток набора', lightC.sigKey, oldKey({ cares: [D1, D2, D3], fams: [W1, W2] }));
+    eq('перенос: повтор не перезаписывает файл (тот же набор)', C.timesheetSigsFileSame(fileC, lightC, backC), true);
+    eq('перенос: обратное чтение файла подтверждает подписи', C.timesheetSigsFileHas(fileC, effLegC), true);
+    eq('перенос: файл без роли не подтверждает', C.timesheetSigsFileHas({ kind: 'metapel-ts-sigs', care: fileC.care }, effLegC), false);
+    var lightR = applyPatch(legReg, C.timesheetSigsLight(effLegR, false));
+    eq('перенос обычного: метки, счётчики 0, ключ v6.12',
+      [lightR.caregiverSig, lightR.familySig, lightR.caregiverSigsN, lightR.familySigsN, lightR.sigKey],
+      [C.TS_SIG_MARK, C.TS_SIG_MARK, 0, 0, oldKey({ care: PA, fam: PB })]);
+    // как сентябрьский Claims в облаке: отметка метапелет без картинки + 5 недель Григория
+    var septC = { id: 'ts-s', claims: true, caregiverSigned: true, familySigned: true, familySig: W1, familySigs: [W1, W2] };
+    var septL = applyPatch(septC, C.timesheetSigsLight(C.timesheetSigsEffective(septC, null), true));
+    eq('перенос «сентября»: статус тот же (Григорий — да, метапелет — нужна по дням)', [tss(septC), tss(septL)], ['family', 'family']);
+    eq('перенос «сентября»: у метапелет нет ни метки, ни счётчика', [septL.caregiverSig, septL.caregiverSigsN], [undefined, 0]);
+    eq('перенос «сентября»: у Григория — заглушки и счётчик по числу недель', [septL.familySigs, septL.familySigsN], [mk(2), 2]);
+
+    // недостающие подписи: собирать без них нельзя
+    eq('missing: метки, а файла нет → обе роли', C.timesheetSigsMissing(lightC, null), ['care', 'fam']);
+    eq('missing: файл на месте → нет', C.timesheetSigsMissing(lightC, fileC), []);
+    eq('missing: счётчик по местам, а в файле лишь одиночная подпись → роль',
+      C.timesheetSigsMissing({ caregiverSig: C.TS_SIG_MARK, caregiverSigsN: 3 }, { kind: 'metapel-ts-sigs', care: { sig: D1, sigs: null } }), ['care']);
+    eq('missing: старая запись с картинками → нет', C.timesheetSigsMissing(legClaims, null), []);
+    eq('missing: неподписанный бланк → нет', C.timesheetSigsMissing({ id: 'n' }, null), []);
+    eq('missing: заглушки по местам без счётчика, файла нет → роль', C.timesheetSigsMissing({ familySigs: mk(2) }, null), ['fam']);
+
+    // сведение «запись против файла» (гонки устройств, старые версии)
+    var fileOther = { kind: 'metapel-ts-sigs', v: 1, id: 'ts-9',
+      care: { sig: PC, sigs: [PC, D2, D3], date: '2026-10-03' }, fam: { sig: W1, sigs: [W1, W2], date: '2026-10-02' } };
+    var effPure = C.timesheetSigsEffective(legClaims, fileOther);
+    eq('сведение: не перенесённая (устаревшая) запись — новее файл', effPure.care.sigs, [PC, D2, D3]);
+    eq('сведение: …набор записи не теряется — в prev',
+      effPure.prev.map(function (p) { return p.role + ':' + p.sigs.join(','); }), ['care:' + [D1, D2, D3].join(',')]);
+    var mixed = clone(lightC); mixed.caregiverSig = PC; mixed.caregiverSigs = [PC, D2, D3]; // старая версия дописала ПОСЛЕ переноса
+    var effMixed = C.timesheetSigsEffective(mixed, fileC);
+    eq('сведение: перенесённая запись + картинки старой версии — новее запись', effMixed.care.sigs, [PC, D2, D3]);
+    eq('сведение: …набор файла — в prev', effMixed.prev.length === 1 && effMixed.prev[0].role === 'care' && effMixed.prev[0].sigs[0] === D1, true);
+    eq('сведение: повторное сведение не дублирует prev',
+      C.timesheetSigsEffective(mixed, JSON.parse(JSON.stringify(C.timesheetSigsFile(mixed, effMixed)))).prev.length, 1);
+    eq('сведение: одинаковые наборы — без prev', C.timesheetSigsEffective(legClaims, fileC).prev.length, 0);
+    // кто новее: полнота набора (Claims) → дата подписи → отметка переноса
+    var staleArch = clone(lightC); staleArch.caregiverSig = PC; staleArch.caregiverSigs = [PC, D2, D3]; staleArch.caregiverSignedDate = '2026-09-01';
+    eq('сведение: устаревшая перенесённая копия (старше по дате) НЕ перебивает новый набор файла',
+      C.timesheetSigsEffective(staleArch, fileC).care.sigs, [D1, D2, D3]);
+    var fileSingle = { kind: 'metapel-ts-sigs', fam: { sig: W2, sigs: null, date: '2026-10-09' } };
+    var effFull = C.timesheetSigsEffective(legClaims, fileSingle);
+    eq('сведение Claims: набор «по неделям» важнее одиночной подписи (даже более поздней)', [effFull.fam.sigs, effFull.prev[0].sig], [[W1, W2], W2]);
+    eq('сведение обычного бланка: одиночная подпись — позднейшая по дате',
+      C.timesheetSigsEffective(legReg, { kind: 'metapel-ts-sigs', care: { sig: PC, sigs: null, date: '2026-10-05' } }).care.sig, PC);
+
+    // «отметить по архиву»: подписи в файле есть, а запись их не числит
+    var lostFam = { id: 'ts-9', claims: true, caregiverSigned: true, caregiverSig: MK, caregiverSigsN: 3, caregiverSigs: mk(3), familySigned: false };
+    var heal = C.timesheetSigsFromFile(lostFam, fileC);
+    eq('по архиву: роль Григория отмечена — флаг, дата из файла, метка, счётчик, заглушки',
+      [heal.familySigned, heal.familySignedDate, heal.familySig, heal.familySigsN, heal.familySigs], [true, '2026-10-02', MK, 2, mk(2)]);
+    eq('по архиву: уже отмеченная роль не трогается', heal.hasOwnProperty('caregiverSig') || heal.hasOwnProperty('caregiverSigned'), false);
+    eq('по архиву: роль Claims «по местам» засчитана после отметки', C.timesheetFamilyDone(applyPatch(lostFam, heal)), true);
+    eq('по архиву: запись с собственными картинками не трогается (её сведёт перенос)', C.timesheetSigsFromFile(legClaims, fileOther), null);
+    eq('по архиву: нечего отмечать → null', C.timesheetSigsFromFile(lightC, fileC), null);
+    var flagOnly = { id: 's', claims: true, caregiverSigned: true, familySigned: true, familySig: MK, familySigsN: 2, familySigs: mk(2) };
+    eq('по архиву: отметка метапелет без картинки + подписи по дням в файле → засчитано',
+      C.timesheetCareDone(applyPatch(flagOnly, C.timesheetSigsFromFile(flagOnly, fileC))), true);
+    eq('сведение: у записи роли нет — роль из файла', C.timesheetSigsEffective({ id: 'x', claims: true }, fileC).fam.sigs, [W1, W2]);
+    eq('сведение: метка — не картинка (переносить из записи нечего)', C.timesheetHasRecordSigs(lightC), false);
+    eq('сведение: в старой записи картинки есть', C.timesheetHasRecordSigs(legReg), true);
+
+    // новая подпись роли
+    var effNew = C.timesheetSigsWith(effLegC, 'fam', { sig: W2, sigs: [W2, W1], date: '2026-10-04' });
+    eq('новая подпись роли заменяет прежнюю, другая роль цела', [effNew.fam.sigs, effNew.care.sigs, effNew.prev.length], [[W2, W1], [D1, D2, D3], 0]);
+    eq('подпись роли с другого устройства (keepOld) не пропадает — в prev',
+      C.timesheetSigsWith(effLegC, 'fam', { sig: W2, sigs: [W2, W1] }, true).prev.length, 1);
+    var badSig = null;
+    try { C.timesheetSigsWith(effLegC, 'fam', { sig: 'не картинка', sigs: null }); } catch (e) { badSig = e.message; }
+    eq('новая «подпись» не картинка → ошибка (роль молча не теряется)', !!badSig, true);
+    eq('файл подписей: чужое содержимое не принимаем за наш файл',
+      [C.timesheetSigsFileValid(null), C.timesheetSigsFileValid(fileC), C.timesheetSigsFileValid({ pdf: 'x' })], [true, true, false]);
+    eq('файл подписей: prev ограничен последними 4 наборами', (function () {
+      var e = C.timesheetSigsEffective(null, null);
+      for (var i = 0; i < 9; i++) e = C.timesheetSigsWith(e, 'care', { sig: 'data:image/png;base64,Q' + i }, true);
+      return e.prev.length;
+    })(), 4);
+
     // ---------- вывод ----------
     var table = document.getElementById('results');
     var passed = 0;

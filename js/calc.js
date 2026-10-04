@@ -120,19 +120,235 @@ window.MetapelCalc = (function () {
     return 'h' + (h >>> 0).toString(16);
   }
 
+  // ---------- подписи табелей: запись + файл архива ----------
+  //
+  // Картинки подписей табеля (PNG dataURL) лежат НЕ в записи, а в файле архива
+  // timesheets/<id>-sigs.json:
+  //   { kind: 'metapel-ts-sigs', v: 1, id, month,
+  //     care: { sig, sigs, date } | null,  // метапелет: sig — одна подпись во все места
+  //     fam:  { sig, sigs, date } | null,  //   (у Claims — первая), sigs — «по местам»
+  //     prev: [{ role, sig, sigs, date }] } // наборы, проигравшие при сведении (не теряем)
+  // В записи (она едет в бэкап и в localStorage) — только метка вместо одиночной
+  // подписи (caregiverSig / familySig = TS_SIG_MARK), счётчики подписей «по местам»
+  // (caregiverSigsN / familySigsN), отпечаток набора sigKey (им помечен правильно
+  // собранный -signed) и sigsArchived: true. Раньше картинки лежали прямо в записи —
+  // ~95% объёма бэкапа и localStorage (у бланка Claims до 26 подписей в месяц).
+  // Метка — НЕ картинка намеренно: старая версия приложения, которая попробует
+  // вставить её в бланк как подпись, упадёт с ошибкой («not a PNG»), а не соберёт
+  // молча бланк без чужой подписи. По той же причине массивы подписей «по местам»
+  // в записи заменены ЗАГЛУШКАМИ (TS_SIG_MARK#1…#N, тоже не картинки): v6.12 видит,
+  // что подписи по местам есть (статус верный, переподписать «по-старому» не
+  // предложит), вставить заглушку в бланк не даст pdf-lib, а отправку Claims
+  // остановит её же сверка отпечатка (пересобрать не выйдет — «not a PNG»).
+  // Заглушки РАЗНЫЕ: одинаковые v6.12 сочла бы «одинаковыми подписями» и
+  // посоветовала бы удалить бланк и загрузить заново (подписи бы «осиротели»).
+  var TS_SIG_MARK = 'in-sigs-file';
+  var TS_ROLES = ['care', 'fam'];
+  var TS_ROLE_FIELDS = {
+    care: { sig: 'caregiverSig', sigs: 'caregiverSigs', n: 'caregiverSigsN', flag: 'caregiverSigned', date: 'caregiverSignedDate' },
+    fam: { sig: 'familySig', sigs: 'familySigs', n: 'familySigsN', flag: 'familySigned', date: 'familySignedDate' }
+  };
+  var TS_PREV_MAX = 4; // файл подписей остаётся небольшим (Claims-набор ~26 картинок)
+
+  function tsIsPng(s) { return typeof s === 'string' && s.indexOf('data:image/') === 0; }
+  function tsPngList(a) {
+    if (!Array.isArray(a) || !a.length) return null;
+    for (var i = 0; i < a.length; i++) if (!tsIsPng(a[i])) return null;
+    return a.slice();
+  }
+  // подписи роли { sig, sigs, date } или null, если картинок нет
+  function tsRoleSigs(sig, sigs, date) {
+    var one = tsIsPng(sig) ? sig : null, many = tsPngList(sigs);
+    return (one || many) ? { sig: one, sigs: many, date: date || null } : null;
+  }
+  function tsRoleKey(r) { return r ? (r.sig || '') + '#' + (r.sigs ? r.sigs.join('|') : '') : ''; }
+  // заглушки подписей «по местам» для записи (см. TS_SIG_MARK)
+  function tsPlaceholders(n) {
+    var a = [];
+    for (var i = 1; i <= n; i++) a.push(TS_SIG_MARK + '#' + i);
+    return a;
+  }
+  // одинаковые ли наборы подписей роли (дата не в счёт)
+  function timesheetSigsRoleSame(a, b) { return tsRoleKey(a) === tsRoleKey(b); }
+
+  // подписи роли, лежащие картинками в САМОЙ записи (запись до переноса в файл или
+  // то, что дописала старая версия приложения); метка и счётчик — не картинки
+  function timesheetRecordRole(rec, role) {
+    var f = TS_ROLE_FIELDS[role];
+    return rec ? tsRoleSigs(rec[f.sig], rec[f.sigs], rec[f.date]) : null;
+  }
+  function timesheetFileRole(file, role) {
+    var r = file && file[role];
+    return r && typeof r === 'object' ? tsRoleSigs(r.sig, r.sigs, r.date) : null;
+  }
+  // в записи остались картинки подписей — их надо перенести в файл архива
+  function timesheetHasRecordSigs(rec) {
+    return !!(timesheetRecordRole(rec, 'care') || timesheetRecordRole(rec, 'fam'));
+  }
+  // файла нет (null) или это наш файл подписей (чужое/битое содержимое не трогаем)
+  function timesheetSigsFileValid(file) {
+    return file === null || file === undefined || (typeof file === 'object' && file.kind === 'metapel-ts-sigs');
+  }
+
+  function tsPushPrev(prev, role, r) {
+    for (var i = 0; i < prev.length; i++) {
+      if (prev[i] && prev[i].role === role && tsRoleKey(tsRoleSigs(prev[i].sig, prev[i].sigs)) === tsRoleKey(r)) return;
+    }
+    prev.push({ role: role, sig: r.sig, sigs: r.sigs, date: r.date });
+    while (prev.length > TS_PREV_MAX) prev.shift();
+  }
+
+  // Чей набор подписей роли действует, если в записи и в файле архива они РАЗНЫЕ
+  // (гонка устройств, старая версия приложения): 1) у бланка Claims — набор с
+  // подписями «по местам» (без них бланк не годится); 2) поставленный позже (дата
+  // подписи); 3) в тот же день — у уже перенесённой записи (sigsArchived) картинку
+  // могла дописать только старая версия ПОСЛЕ переноса — она новее файла, у ещё не
+  // перенесённой новее файл (её копия устарела). true — действует набор записи.
+  function tsRecordWins(rec, inRec, inFile) {
+    if (rec && rec.claims === true && !!inRec.sigs !== !!inFile.sigs) return !!inRec.sigs;
+    if (inRec.date && inFile.date && inRec.date !== inFile.date) return inRec.date > inFile.date;
+    return !!(rec && rec.sigsArchived);
+  }
+
+  // Действующие подписи бланка = файл архива + картинки, оставшиеся в записи; при
+  // расхождении — см. tsRecordWins. Проигравший набор не выбрасываем — он уходит в
+  // prev. Возвращает { care, fam, prev }; care/fam — { sig, sigs, date } или null.
+  function timesheetSigsEffective(rec, file) {
+    var out = { care: null, fam: null, prev: [] };
+    var old = file && Array.isArray(file.prev) ? file.prev : [];
+    for (var i = 0; i < old.length; i++) if (old[i] && typeof old[i] === 'object') out.prev.push(old[i]);
+    TS_ROLES.forEach(function (role) {
+      var inRec = timesheetRecordRole(rec, role), inFile = timesheetFileRole(file, role);
+      if (inRec && inFile && tsRoleKey(inRec) !== tsRoleKey(inFile)) {
+        var recWins = tsRecordWins(rec, inRec, inFile);
+        out[role] = recWins ? inRec : inFile;
+        tsPushPrev(out.prev, role, recWins ? inFile : inRec);
+      } else {
+        out[role] = inFile || inRec;
+      }
+    });
+    return out;
+  }
+
+  // Новая подпись роли (её только что поставили) заменяет прежнюю. keepOld —
+  // прежний (другой) набор сохранить в prev: живая подпись не пропадает из архива
+  // бесследно, даже если её заменили.
+  function timesheetSigsWith(eff, role, own, keepOld) {
+    var mine = own ? tsRoleSigs(own.sig, own.sigs, own.date) : null;
+    if (own && !mine) throw new Error('подпись не распознана как картинка');
+    var out = { care: eff.care, fam: eff.fam, prev: eff.prev.slice() };
+    if (keepOld && eff[role] && tsRoleKey(eff[role]) !== tsRoleKey(mine)) tsPushPrev(out.prev, role, eff[role]);
+    out[role] = mine;
+    return out;
+  }
+
+  // Картинки, из которых собирается подписанный PDF: у бланка Claims — только
+  // подписи «по местам» (свой день / своя неделя), у обычного — одна подпись роли
+  // во все её места.
+  function timesheetSigSpec(eff, claims) {
+    var c = (eff && eff.care) || {}, f = (eff && eff.fam) || {};
+    return claims === true ? { cares: c.sigs || undefined, fams: f.sigs || undefined }
+      : { care: c.sig || undefined, fam: f.sig || undefined };
+  }
+  // «Отпечаток» набора подписей, из которого собран файл -signed. Формат v6.12 —
+  // НЕ менять: им помечены уже собранные файлы. При отправке файл сверяется с
+  // подписями бланка: собранный не из них (старой версией приложения, в гонке
+  // устройств) не уйдёт — его предложат пересобрать.
+  function timesheetSigKey(spec) {
+    var s = (spec.cares ? spec.cares.join('|') : (spec.care || '')) + '#' +
+      (spec.fams ? spec.fams.join('|') : (spec.fam || ''));
+    return 'v2:' + s.length + ':' + hashString(s);
+  }
+
+  // содержимое файла архива timesheets/<id>-sigs.json для набора eff
+  function timesheetSigsFile(rec, eff) {
+    var o = { kind: 'metapel-ts-sigs', v: 1, id: rec.id, month: rec.month || null, care: eff.care, fam: eff.fam };
+    if (eff.prev && eff.prev.length) o.prev = eff.prev;
+    return o;
+  }
+  // в файле уже ровно этот набор (подписи, даты, prev) — перезаписывать незачем
+  function timesheetSigsFileSame(file, rec, eff) {
+    if (!file) return false;
+    return JSON.stringify(timesheetSigsFile(rec, timesheetSigsEffective(null, file))) ===
+      JSON.stringify(timesheetSigsFile(rec, eff));
+  }
+  // файл (прочитанный обратно после записи) несёт ровно эти подписи обеих ролей
+  function timesheetSigsFileHas(file, eff) {
+    return TS_ROLES.every(function (role) { return tsRoleKey(timesheetFileRole(file, role)) === tsRoleKey(eff[role]); });
+  }
+
+  // Поля записи после переноса подписей в файл: картинки уходят — вместо одиночной
+  // подписи метка, вместо подписей «по местам» заглушки (см. TS_SIG_MARK); остаются
+  // счётчики подписей «по местам» и отпечаток набора. Значение undefined = поле
+  // удаляется (в JSON его нет).
+  function timesheetSigsLight(eff, claims) {
+    var p = { sigsArchived: true, sigKey: timesheetSigKey(timesheetSigSpec(eff, claims)) };
+    TS_ROLES.forEach(function (role) {
+      var f = TS_ROLE_FIELDS[role], r = eff[role];
+      p[f.sig] = r ? TS_SIG_MARK : undefined;
+      p[f.sigs] = r && r.sigs ? tsPlaceholders(r.sigs.length) : undefined;
+      p[f.n] = r && r.sigs ? r.sigs.length : 0;
+    });
+    return p;
+  }
+
+  // Подписи роли лежат в файле архива, а запись их не числит (запись того устройства
+  // проиграла гонку выгрузки, или её вернула старая версия без счётчика): поля,
+  // отмечающие их в записи, — флаг (дата — из файла), метка, счётчик и заглушки «по
+  // местам». null — отмечать нечего. Картинки в самой записи не трогаем — их сведёт
+  // перенос в архив (timesheetSigsEffective).
+  function timesheetSigsFromFile(rec, file) {
+    if (!rec) return null;
+    var p = {}, any = false;
+    TS_ROLES.forEach(function (role) {
+      var f = TS_ROLE_FIELDS[role], r = timesheetFileRole(file, role);
+      if (!r || timesheetRecordRole(rec, role)) return;
+      if (!rec[f.sig]) { p[f.sig] = TS_SIG_MARK; any = true; }
+      if (r.sigs && !(timesheetSigsCount(rec, role) > 0)) {
+        p[f.sigs] = tsPlaceholders(r.sigs.length); p[f.n] = r.sigs.length; any = true;
+      }
+      if (!rec[f.flag]) { p[f.flag] = true; p[f.date] = r.date || null; any = true; }
+    });
+    return any ? p : null;
+  }
+
+  // Роли, чьи подписи запись числит (метка, подписи «по местам» — счётчик или
+  // заглушки), а картинок нет ни в записи, ни в файле архива. Собирать бланк без них
+  // нельзя — потеряли бы подпись.
+  function timesheetSigsMissing(rec, file) {
+    var eff = timesheetSigsEffective(rec, file), miss = [];
+    TS_ROLES.forEach(function (role) {
+      var f = TS_ROLE_FIELDS[role], r = eff[role];
+      if ((rec && rec[f.sig] === TS_SIG_MARK && !r) || (timesheetSigsCount(rec, role) > 0 && !(r && r.sigs))) miss.push(role);
+    });
+    return miss;
+  }
+
+  // Сколько у роли подписей «по местам» (бланк Claims: по дню / по неделе). Старые
+  // записи несут сами массивы картинок, новые — счётчик и заглушки той же длины
+  // (картинки в файле архива). Массив в записи важнее счётчика: его могла дописать
+  // старая версия приложения уже после переноса — он новее.
+  function timesheetSigsCount(rec, role) {
+    var f = TS_ROLE_FIELDS[role];
+    var a = rec && rec[f.sigs];
+    if (Array.isArray(a) && a.length) return a.length;
+    var n = rec && rec[f.n];
+    return typeof n === 'number' && n > 0 ? n : 0;
+  }
+
   // статус табеля Битуах Леуми из флагов (чистая функция)
   // Подпись роли засчитана? У бланка Claims Conference (rec.claims) — только
-  // «по местам»: метапелет отдельно за каждый день (caregiverSigs), Григорий
-  // отдельно за каждую неделю (familySigs). Флаг без таких подписей (старая версия
-  // ставила одну подпись на все места или только отметку) — не подпись этого бланка:
-  // роль снова просят расписаться.
+  // «по местам»: метапелет отдельно за каждый день, Григорий отдельно за каждую
+  // неделю (счётчик / массив, см. timesheetSigsCount). Флаг без таких подписей
+  // (старая версия ставила одну подпись на все места или только отметку) — не
+  // подпись этого бланка: роль снова просят расписаться.
   function timesheetCareDone(rec) {
     return !!(rec && rec.caregiverSigned &&
-      (rec.claims !== true || (rec.caregiverSigs && rec.caregiverSigs.length)));
+      (rec.claims !== true || timesheetSigsCount(rec, 'care') > 0));
   }
   function timesheetFamilyDone(rec) {
     return !!(rec && rec.familySigned &&
-      (rec.claims !== true || (rec.familySigs && rec.familySigs.length)));
+      (rec.claims !== true || timesheetSigsCount(rec, 'fam') > 0));
   }
 
   function timesheetStatus(rec) {
@@ -1072,6 +1288,24 @@ window.MetapelCalc = (function () {
     timesheetStatus: timesheetStatus,
     timesheetCareDone: timesheetCareDone,
     timesheetFamilyDone: timesheetFamilyDone,
+    // подписи табелей: запись + файл архива timesheets/<id>-sigs.json
+    TS_SIG_MARK: TS_SIG_MARK,
+    timesheetSigsCount: timesheetSigsCount,
+    timesheetRecordRole: timesheetRecordRole,
+    timesheetFileRole: timesheetFileRole,
+    timesheetHasRecordSigs: timesheetHasRecordSigs,
+    timesheetSigsFileValid: timesheetSigsFileValid,
+    timesheetSigsEffective: timesheetSigsEffective,
+    timesheetSigsWith: timesheetSigsWith,
+    timesheetSigsRoleSame: timesheetSigsRoleSame,
+    timesheetSigSpec: timesheetSigSpec,
+    timesheetSigKey: timesheetSigKey,
+    timesheetSigsFile: timesheetSigsFile,
+    timesheetSigsFileSame: timesheetSigsFileSame,
+    timesheetSigsFileHas: timesheetSigsFileHas,
+    timesheetSigsLight: timesheetSigsLight,
+    timesheetSigsFromFile: timesheetSigsFromFile,
+    timesheetSigsMissing: timesheetSigsMissing,
     timesheetsOfMonth: timesheetsOfMonth,
     timesheetGroupStatus: timesheetGroupStatus,
     defaultSettings: defaultSettings,

@@ -71,7 +71,9 @@ window.MetapelSync = (function () {
       return fetch(url, { method: 'PUT', headers: headers(c), body: JSON.stringify(body) })
         .then(function (r) {
           if (r.status === 409 || r.status === 422) {
-            throw new Error('Облачная копия изменилась с другого устройства — обновите страницу.');
+            var ce = new Error('Облачная копия изменилась с другого устройства — обновите страницу.');
+            ce.cas = true; // вызывающий может перечитать файл и повторить (CAS)
+            throw ce;
           }
           if (!r.ok) {
             return r.text().then(function (t) {
@@ -173,10 +175,13 @@ window.MetapelSync = (function () {
 
   // мягкое чтение облачной копии. Возвращает { data, sha }:
   // data=null если копии ещё нет (404); sha нужен для compare-and-swap при записи.
+  // МИМО кэша браузера: ответ GitHub API разрешено кэшировать до 60 с, а решения
+  // «подтянуть / залить / облако не менялось» и sha для CAS нужны по свежей копии
+  // (иначе другое устройство, записавшее только что, осталось бы незамеченным).
   function readCloudBackup(settings) {
     var c = conf(settings);
     var url = 'https://api.github.com/repos/' + c.repo + '/contents/' + dataPrefix() + 'backup/data.json';
-    return fetch(url, { headers: headers(c) }).then(function (r) {
+    return fetch(url, { headers: headers(c), cache: 'no-store' }).then(function (r) {
       if (r.status === 404) return null;
       if (!r.ok) throw new Error('GitHub ' + r.status);
       return r.json();
@@ -189,7 +194,7 @@ window.MetapelSync = (function () {
       }
       // файл >1 МБ: Contents API не вернул содержимое — тянем сырой по ссылке
       if (j.download_url) {
-        return fetch(j.download_url).then(function (raw) {
+        return fetch(j.download_url, { cache: 'no-store' }).then(function (raw) {
           if (!raw.ok) throw new Error('GitHub ' + raw.status);
           return raw.json();
         }).then(function (d) { return { data: d, sha: sha }; });
@@ -309,13 +314,16 @@ window.MetapelSync = (function () {
         sharedSettingsFromCloud(cloud && cloud.settings, cloud && (cloudGen > localGen)));
       var newGen = Math.max(cloudGen, localGen) + 1;
       var json = buildBackupJson(settings, store, newGen);
+      // хэш РОВНО того, что уходит в облако, — тем же мгновенным снимком, что json
+      // (настройки уже с принятой облачной суммой). Считать его после записи по живым
+      // данным нельзя: оплата / сумма от Матав, отмеченные, пока шла запись, сочлись
+      // бы «залитыми» и не уехали бы в облако никогда (находка ревью v6.13)
+      var pushedHash = hashFn(buildBackupJson(settings, store, 0));
       // CAS по прочитанному sha: если другое устройство залило между нашим чтением
       // и записью — putFile бросит ошибку, и мы не затрём чужую запись (гонка)
       return putFile(conf(settings), dataPrefix() + 'backup/data.json', json, 'Data backup gen ' + newGen, res.sha).then(function () {
         store.setMeta('backupGeneration', newGen);
-        // пересчитываем хэш по АКТУАЛЬНЫМ настройкам (могли принять облачную сумму),
-        // чтобы lastBackupHash отражал реально залитое содержимое
-        store.setMeta('lastBackupHash', hashFn(buildBackupJson(settings, store, 0)));
+        store.setMeta('lastBackupHash', pushedHash);
         store.setMeta('lastSyncError', null);
         return true;
       });
@@ -362,12 +370,147 @@ window.MetapelSync = (function () {
     return dataPrefix() + 'timesheets/' + id + (suffix || '') + '.json';
   }
 
-  // заливает файл табеля (исходный или подписанный) в репозиторий данных.
-  // obj — { pdf: 'data:application/pdf;base64,...', fileName, month }.
-  function putTimesheetFile(settings, id, suffix, obj) {
+  // заливает файл табеля в репозиторий данных: исходный / подписанный бланк
+  // ({ pdf: 'data:application/pdf;base64,...', fileName, month }) или подписи
+  // бланка (suffix '-sigs', см. calc.js timesheetSigsFile).
+  // casSha (необязательно) — запись с compare-and-swap: sha прочитанной версии или
+  // null («файла ещё нет»: создать, но не затереть созданный тем временем другим
+  // устройством). Без casSha — прежняя перезапись поверх.
+  function putTimesheetFile(settings, id, suffix, obj, casSha) {
     if (!isOn(settings)) return Promise.reject(new Error('Архив не настроен (нет токена).'));
     var json = JSON.stringify(obj);
-    return putFile(conf(settings), timesheetPath(id, suffix), json, 'Timesheet ' + id + (suffix || ''));
+    return putFile(conf(settings), timesheetPath(id, suffix), json, 'Timesheet ' + id + (suffix || ''), casSha);
+  }
+
+  // Читает файл табеля вместе с его sha (для compare-and-swap) МИМО кэша браузера:
+  // ответ GitHub API разрешено кэшировать до 60 с, а для CAS и анти-гонки нужна
+  // свежая версия. Файла нет (404) → { data: null, sha: null }.
+  function readTimesheetFile(settings, id, suffix) {
+    var c = conf(settings);
+    if (!c.repo || !c.token) return Promise.reject(new Error('Архив не настроен (нет токена).'));
+    var url = 'https://api.github.com/repos/' + c.repo + '/contents/' + timesheetPath(id, suffix);
+    return fetch(url, { headers: headers(c), cache: 'no-store' }).then(function (r) {
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error('GitHub ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      if (j === null) return { data: null, sha: null };
+      var sha = j.sha || null;
+      var content = String(j.content || '').replace(/\s/g, '');
+      if (content) return { data: JSON.parse(decodeURIComponent(escape(atob(content)))), sha: sha };
+      // файл >1 МБ: Contents API содержимое не отдаёт. Берём blob ИМЕННО этого sha
+      // (сырая ссылка download_url кэшируется по имени ветки и могла бы вернуть
+      // другую версию — тогда CAS сверял бы sha одной версии с содержимым другой)
+      if (sha) {
+        var bu = 'https://api.github.com/repos/' + c.repo + '/git/blobs/' + sha;
+        return fetch(bu, { headers: headers(c), cache: 'no-store' }).then(function (b) {
+          if (!b.ok) throw new Error('GitHub ' + b.status);
+          return b.json();
+        }).then(function (blob) {
+          var bc = String(blob.content || '').replace(/\s/g, '');
+          return { data: JSON.parse(decodeURIComponent(escape(atob(bc)))), sha: sha };
+        });
+      }
+      throw new Error('Не удалось прочитать файл табеля.');
+    });
+  }
+
+  // ПЕРЕНОС подписей табеля из записи в файл архива timesheets/<id>-sigs.json
+  // (первая фаза — только файл). Картинки из записи сводятся с файлом (файл уже
+  // есть — ничего в нём не теряем, см. calc.js timesheetSigsEffective), запись — с
+  // CAS по sha; при гонке с другим устройством — перечитать и свести заново. Файл
+  // перечитывается после записи: убирать картинки из записи можно, только когда
+  // они точно в архиве. Саму запись НЕ трогает — возвращает { id, snap, patch }:
+  // облегчение записи, которое вызывающий применит, лишь если запись за это время
+  // не изменилась (snap); null — переносить нечего.
+  function archiveTimesheetSigs(settings, rec) {
+    var C = window.MetapelCalc;
+    if (!rec || !C.timesheetHasRecordSigs(rec)) return Promise.resolve(null);
+    var snap = JSON.stringify(rec);
+    function attempt(n) {
+      return readTimesheetFile(settings, rec.id, '-sigs').then(function (res) {
+        // e.permanent — повтором не исправить (не сеть): эту запись пока не переносим
+        if (!C.timesheetSigsFileValid(res.data)) throw permanent('Файл подписей табеля ' + rec.id + ' повреждён.');
+        // запись числит подписи, которых нет ни в ней, ни в файле, — переносом эту
+        // «тревогу» не стираем (облегчённая запись выглядела бы цельной)
+        if (C.timesheetSigsMissing(rec, res.data).length) throw permanent('Подписи табеля ' + rec.id + ' не найдены в архиве.');
+        var eff = C.timesheetSigsEffective(rec, res.data);
+        if (C.timesheetSigsFileSame(res.data, rec, eff)) return eff;
+        return putTimesheetFile(settings, rec.id, '-sigs', C.timesheetSigsFile(rec, eff), res.sha || null).then(function () {
+          return readTimesheetFile(settings, rec.id, '-sigs');
+        }).then(function (back) {
+          if (!C.timesheetSigsFileHas(back.data, eff)) throw new Error('Подписи табеля ' + rec.id + ' не подтвердились в архиве.');
+          return eff;
+        });
+      }).catch(function (e) {
+        if (e && e.cas && n < 2) return attempt(n + 1);
+        throw e;
+      });
+    }
+    return attempt(0).then(function (eff) {
+      return { id: rec.id, snap: snap, patch: C.timesheetSigsLight(eff, rec.claims === true) };
+    });
+  }
+  function permanent(text) { var e = new Error(text); e.permanent = true; return e; }
+
+  // ПЕРЕНОС, вторая фаза: облегчённые записи (ready — из archiveTimesheetSigs)
+  // фиксируются СНАЧАЛА в облаке, потом локально — как один шаг: только если облако
+  // не менялось с последней синхронизации этого устройства (generation при свежем
+  // чтении = своему) и устройство «чистое» (всё локальное уже в облаке); бэкап
+  // пишется с CAS по sha этого чтения. Не вышло (кто-то записал, сеть) — локально
+  // ничего не меняется и устройство остаётся чистым: перенос повторится позже, а
+  // чужая свежая запись не будет затёрта. Возвращает число облегчённых записей.
+  function commitArchivedSigs(settings, store, ready, hashFn) {
+    if (!isOn(settings) || !ready || !ready.length) return Promise.resolve(0);
+    return readCloudBackup(settings).then(function (res) {
+      var cloud = res.data, localGen = store.getMeta('backupGeneration') || 0;
+      if (!cloud || cloud.generation !== localGen) return 0;
+      if (hashFn(buildBackupJson(settings, store, 0)) !== store.getMeta('lastBackupHash')) return 0;
+      var view = archivedView(store, ready);
+      if (!view.applied.length) return 0;
+      // снимок настроек — на момент сборки: правка настроек за время записи (сумма от
+      // Матав) не должна попасть в хэш «залитого», иначе она так и не уехала бы в облако
+      var snapSettings = JSON.parse(JSON.stringify(settings));
+      var newGen = localGen + 1;
+      var json = buildBackupJson(snapSettings, view, newGen);
+      var pushedHash = hashFn(buildBackupJson(snapSettings, view, 0));
+      return putFile(conf(settings), dataPrefix() + 'backup/data.json', json,
+        'Data backup gen ' + newGen + ' (подписи табелей — в файлах архива)', res.sha).then(function () {
+        var n = 0;
+        view.applied.forEach(function (r) {
+          var now = store.loadTimesheets().filter(function (t) { return t.id === r.id; })[0];
+          if (now && JSON.stringify(now) === r.snap) { store.updateTimesheet(r.id, r.patch); n++; }
+        });
+        store.setMeta('backupGeneration', newGen);
+        // хэш ровно того, что ушло в облако: изменённое здесь за время записи (если
+        // было) останется «несинхронным» и уйдёт обычной заливкой
+        store.setMeta('lastBackupHash', pushedHash);
+        return n;
+      });
+    });
+  }
+  // данные устройства «как после облегчения»: снимок на момент вызова, записи табелей
+  // — с правками переноса (только не менявшиеся с момента переноса)
+  function archivedView(store, ready) {
+    var byId = {}, applied = [];
+    ready.forEach(function (r) { byId[r.id] = r; });
+    var ts = store.loadTimesheets().map(function (t) {
+      var r = byId[t.id];
+      if (!r || JSON.stringify(t) !== r.snap) return t;
+      applied.push(r);
+      var o = JSON.parse(JSON.stringify(t));
+      for (var k in r.patch) if (r.patch.hasOwnProperty(k)) o[k] = r.patch[k];
+      return JSON.parse(JSON.stringify(o)); // как localStorage: undefined-поля исчезают
+    });
+    var log = store.loadLog(), extras = store.loadExtras(), returns = store.loadReturns();
+    function copy(x) { return JSON.parse(JSON.stringify(x)); }
+    return {
+      applied: applied,
+      loadLog: function () { return copy(log); },
+      loadExtras: function () { return copy(extras); },
+      loadReturns: function () { return copy(returns); },
+      loadTimesheets: function () { return copy(ts); }
+    };
   }
 
   // читает файл табеля из репозитория данных. Возвращает разобранный объект.
@@ -597,6 +740,9 @@ window.MetapelSync = (function () {
     buildBackupJson: buildBackupJson,
     fetchReceipt: fetchReceipt,
     putTimesheetFile: putTimesheetFile,
-    fetchTimesheetFile: fetchTimesheetFile
+    fetchTimesheetFile: fetchTimesheetFile,
+    readTimesheetFile: readTimesheetFile,
+    archiveTimesheetSigs: archiveTimesheetSigs,
+    commitArchivedSigs: commitArchivedSigs
   };
 })();

@@ -63,7 +63,11 @@ window.MetapelTimesheet = (function () {
 
   // По извлечённым текстовым элементам строит список «слотов» подписи.
   // items: [{s, x, y, w}] в координатах pdf.js (низ-слева).
-  function computeSlots(items) {
+  // opts.claimsCare — места метапелет на бланке Claims (по дням). Только по явному
+  // запросу: старый app.js из кэша (не знает о подписях по дням) получит прежнюю
+  // карту и не поставит одну подпись метапелет во все дни бланка Claims.
+  function computeSlots(items, opts) {
+    opts = opts || {};
     var cCare = findOne(items, /חתימת המטפל/);   // подпись метапелет (по дням)
     var cWeek = findOne(items, /חתימה שבועית/);  // недельная подпись
     var cDay = findOne(items, /^יום$/);          // столбец дня (№)
@@ -136,9 +140,9 @@ window.MetapelTimesheet = (function () {
     });
 
     // Бланк Claims Conference («אל קרן נפגעי שואה», с 08/2026 — второй бланк
-    // месяца): ответственный за него НЕ требует подписи метапелет и НЕ принимает
-    // одинаковые недельные подписи. Поэтому в нём нет care-day слотов, а каждая
-    // неделя подписывается ОТДЕЛЬНОЙ живой подписью (сбор — в app.js).
+    // месяца): ответственный за него НЕ принимает одинаковые подписи — метапелет
+    // расписывается ОТДЕЛЬНО за каждый рабочий день, Григорий — ОТДЕЛЬНО за каждую
+    // неделю (живые подписи; сбор серий — в app.js). Места те же, что в обычном.
     // Ищем только в ШАПКЕ (выше таблицы — там адресат «אל …»): те же слова в
     // примечаниях под таблицей обычного бланка не должны отнимать места метапелет.
     var claims = items.some(function (it) {
@@ -146,13 +150,14 @@ window.MetapelTimesheet = (function () {
     });
 
     // ДВА столбца подписи = ДВА подписанта (как в образце):
-    //   חתימת המטפלת (careX)  — метапелет, в КАЖДЫЙ рабочий день (кроме Claims);
+    //   חתימת המטפלת (careX)  — метапелет, в КАЖДЫЙ рабочий день;
     //   חתימה שבועית (weekX) — Григорий (член семьи), ОДНА подпись на неделю.
     // Плюс нижние блоки: אישור המטפל/ת (метапелет) и בן/בת משפחה (Григорий).
+    // day — число месяца: по нему окно подписи называет, ЗА КАКОЙ день расписываться.
     var slots = [];
-    if (!claims) {
+    if (!claims || opts.claimsCare) {
       work.forEach(function (r) {
-        slots.push({ kind: 'care-day', cx: careX, cy: r.y + 2, w: 46, h: 11, label: 'метапелет — день ' + r.num });
+        slots.push({ kind: 'care-day', cx: careX, cy: r.y + 2, w: 46, h: 11, label: 'метапелет — день ' + r.num, day: r.num });
       });
     }
     // недельные группы (новая начинается с воскресенья ראשון или с первой строки);
@@ -190,7 +195,7 @@ window.MetapelTimesheet = (function () {
   // pdf.js МОЖЕТ забрать (detach) переданный буфер в воркер — отдаём КОПИЮ
   // (.slice(0)), иначе исходный baseU8 «опустеет» и pdf-lib потом скажет
   // «No PDF header found» при штамповке того же массива.
-  function parse(pdfU8) {
+  function parse(pdfU8, opts) {
     return ensureLibs().then(function () {
       return window.pdfjsLib.getDocument({ data: pdfU8.slice(0), isEvalSupported: false }).promise;
     }).then(function (doc) {
@@ -200,7 +205,7 @@ window.MetapelTimesheet = (function () {
         var items = tc.items.map(function (it) {
           return { s: String(it.str).trim(), x: it.transform[4], y: it.transform[5], w: it.width };
         }).filter(function (it) { return it.s !== ''; });
-        return computeSlots(items);
+        return computeSlots(items, opts);
       });
     });
   }
@@ -296,19 +301,40 @@ window.MetapelTimesheet = (function () {
   // Рендерит первую страницу PDF в canvas (для предпросмотра).
   // Тоже отдаём pdf.js КОПИЮ: иначе после предпросмотра те же байты «опустеют»
   // и сохранённый подписанный PDF окажется битым.
+  // pdf.js не разрешает две отрисовки в один canvas одновременно («Cannot use the
+  // same canvas during multiple render() operations»): новый предпросмотр, открытый
+  // до окончания прошлого (медленный компьютер, быстрое «Отмена» и повторная
+  // подпись), отменяет незаконченную отрисовку, а отмена ошибкой не считается.
   function render(pdfU8, canvas, scale) {
+    var gen = canvas.__tsRenderGen = (canvas.__tsRenderGen || 0) + 1;
+    if (canvas.__tsRenderTask) {
+      try { canvas.__tsRenderTask.cancel(); } catch (e) { /* уже завершена */ }
+      canvas.__tsRenderTask = null;
+    }
     return ensureLibs().then(function () {
       return window.pdfjsLib.getDocument({ data: pdfU8.slice(0), isEvalSupported: false }).promise;
     }).then(function (doc) {
       return doc.getPage(1);
     }).then(function (page) {
+      if (gen !== canvas.__tsRenderGen) return; // уже начата более новая отрисовка
       var vp = page.getViewport({ scale: scale || 1.3 });
       canvas.width = vp.width; canvas.height = vp.height;
-      return page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      var task = page.render({ canvasContext: canvas.getContext('2d'), viewport: vp });
+      canvas.__tsRenderTask = task;
+      return task.promise.then(function () {
+        if (canvas.__tsRenderTask === task) canvas.__tsRenderTask = null;
+      }, function (e) {
+        if (canvas.__tsRenderTask === task) canvas.__tsRenderTask = null;
+        if (e && (e.name === 'RenderingCancelledException' || /cancel/i.test(e.message || ''))) return;
+        throw e;
+      });
     });
   }
 
   return {
+    // уровень API модуля: app.js проверяет его и отказывается подписывать со старой
+    // копией из кэша (2 = Claims с местами метапелет по дням и полем slot.day)
+    apiLevel: 2,
     ensureLibs: ensureLibs,
     parse: parse,
     parseMonth: parseMonth,

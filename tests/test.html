@@ -427,6 +427,18 @@
     eq('timesheetStatus: оба → full', tss({ caregiverSigned: true, familySigned: true }), 'full');
     eq('timesheetStatus: отослано перекрывает → sent', tss({ caregiverSigned: true, familySigned: true, sentMarked: true }), 'sent');
     eq('timesheetStatus: sent даже без подписей (защитно) → sent', tss({ sentMarked: true }), 'sent');
+    // бланк Claims засчитывается только с подписями «по местам»
+    eq('Claims: флаги без подписей по дням/неделям — НЕ подписан', tss({ claims: true, caregiverSigned: true, familySigned: true }), 'unsigned');
+    eq('Claims: только подписи метапелет по дням → caregiver',
+      tss({ claims: true, caregiverSigned: true, caregiverSigs: ['a', 'b'], familySigned: true }), 'caregiver');
+    eq('Claims: только подписи Григория по неделям → family',
+      tss({ claims: true, caregiverSigned: true, familySigned: true, familySigs: ['x', 'y'] }), 'family');
+    eq('Claims: обе роли по местам → full',
+      tss({ claims: true, caregiverSigned: true, caregiverSigs: ['a', 'b'], familySigned: true, familySigs: ['x', 'y'] }), 'full');
+    eq('обычный бланк: правило «по местам» не применяется → full',
+      tss({ claims: false, caregiverSigned: true, familySigned: true }), 'full');
+    eq('timesheetCareDone: Claims без caregiverSigs — нужно расписаться', C.timesheetCareDone({ claims: true, caregiverSigned: true }), false);
+    eq('timesheetFamilyDone: Claims с familySigs — готово', C.timesheetFamilyDone({ claims: true, familySigned: true, familySigs: ['x'] }), true);
 
     // ---------- табели: несколько бланков в месяце (Claims Conference, 08/2026+) ----------
     var tsList = [
@@ -475,13 +487,18 @@
     function kinds(r, k) { return r.slots.filter(function (s) { return s.kind === k; }); }
     var TSG = window.MetapelTimesheet;
     var regular = TSG.computeSlots(tsItems('אל ועדת הרצליה'));
-    var claimsR = TSG.computeSlots(tsItems('אל קרן נפגעי שואה'));
+    var claimsR = TSG.computeSlots(tsItems('אל קרן נפגעי שואה'), { claimsCare: true });
+    eq('computeSlots: без явного запроса (старый app.js) у Claims прежняя карта — без мест метапелет',
+      kinds(TSG.computeSlots(tsItems('אל קרן נפגעי שואה')), 'care-day').length, 0);
     eq('computeSlots: обычный бланк — не Claims', regular.claims, false);
     eq('computeSlots: обычный бланк — подпись метапелет в каждый рабочий день', kinds(regular, 'care-day').length, 5);
     eq('computeSlots: обычный бланк — по подписи Григория на рабочую неделю', kinds(regular, 'family-week').length, 2);
     eq('computeSlots: бланк «אל קרן נפגעי שואה» распознан как Claims', claimsR.claims, true);
-    eq('computeSlots: в бланке Claims НЕТ мест для подписи метапелет', kinds(claimsR, 'care-day').length, 0);
+    eq('computeSlots: в бланке Claims места метапелет — в каждый рабочий день', kinds(claimsR, 'care-day').length, 5);
+    eq('computeSlots: у места метапелет — число месяца (для окна «день k из N»)',
+      kinds(claimsR, 'care-day').map(function (s) { return s.day; }), [1, 2, 3, 6, 7]);
     eq('computeSlots: в бланке Claims недельных мест столько же', kinds(claimsR, 'family-week').length, 2);
+    eq('модуль подписи: уровень API 2 (app.js отказывается работать со старой копией)', TSG.apiLevel, 2);
     eq('computeSlots: недели пронумерованы по порядку',
       kinds(claimsR, 'family-week').map(function (s) { return s.week; }), [1, 2]);
     eq('computeSlots: у недели — её рабочие дни (для окна «неделя k из N»)',

@@ -121,11 +121,26 @@ window.MetapelCalc = (function () {
   }
 
   // статус табеля Битуах Леуми из флагов (чистая функция)
+  // Подпись роли засчитана? У бланка Claims Conference (rec.claims) — только
+  // «по местам»: метапелет отдельно за каждый день (caregiverSigs), Григорий
+  // отдельно за каждую неделю (familySigs). Флаг без таких подписей (старая версия
+  // ставила одну подпись на все места или только отметку) — не подпись этого бланка:
+  // роль снова просят расписаться.
+  function timesheetCareDone(rec) {
+    return !!(rec && rec.caregiverSigned &&
+      (rec.claims !== true || (rec.caregiverSigs && rec.caregiverSigs.length)));
+  }
+  function timesheetFamilyDone(rec) {
+    return !!(rec && rec.familySigned &&
+      (rec.claims !== true || (rec.familySigs && rec.familySigs.length)));
+  }
+
   function timesheetStatus(rec) {
     if (rec && rec.sentMarked) return 'sent';
-    if (rec && rec.caregiverSigned && rec.familySigned) return 'full';
-    if (rec && rec.caregiverSigned) return 'caregiver';
-    if (rec && rec.familySigned) return 'family';
+    var care = timesheetCareDone(rec), fam = timesheetFamilyDone(rec);
+    if (care && fam) return 'full';
+    if (care) return 'caregiver';
+    if (fam) return 'family';
     return 'unsigned';
   }
 
@@ -1055,6 +1070,8 @@ window.MetapelCalc = (function () {
     plural: plural,
     hashString: hashString,
     timesheetStatus: timesheetStatus,
+    timesheetCareDone: timesheetCareDone,
+    timesheetFamilyDone: timesheetFamilyDone,
     timesheetsOfMonth: timesheetsOfMonth,
     timesheetGroupStatus: timesheetGroupStatus,
     defaultSettings: defaultSettings,

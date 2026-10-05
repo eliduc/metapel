@@ -351,13 +351,157 @@ window.MetapelCalc = (function () {
       (rec.claims !== true || timesheetSigsCount(rec, 'fam') > 0));
   }
 
+  // «отослано» перекрывает остальное (защитно: отмеченное отосланным — отослано), КРОМЕ
+  // бланка Claims, подписанного не так, как требуется: роль отмечена подписанной, а
+  // подписей «по местам» нет (подписала старая версия приложения) — его нужно
+  // переподписать, и отметка от прежней версии не должна это прятать
   function timesheetStatus(rec) {
-    if (rec && rec.sentMarked) return 'sent';
     var care = timesheetCareDone(rec), fam = timesheetFamilyDone(rec);
+    if (rec && rec.sentMarked && !((rec.caregiverSigned && !care) || (rec.familySigned && !fam))) return 'sent';
     if (care && fam) return 'full';
     if (care) return 'caregiver';
     if (fam) return 'family';
     return 'unsigned';
+  }
+
+  // ---------- сведение записей табелей с облаком ----------
+  //
+  // Устройство отстало от облака (на другом устройстве за это время подписали или
+  // отослали), а здесь тоже правили табели. Раньше его заливка затирала облачные
+  // записи табелей целиком: роль, подписанную на другом устройстве (картинки с v6.13
+  // в файлах архива, но запись снова просила расписаться), и «отослано» (месяц снова
+  // предлагался к отправке в Матав) — аудит 05.10.2026. Сводим по записям:
+  //  - роль, подписанная в облаке и не подписанная здесь, берётся из облака целиком
+  //    (флаг, дата, метка/картинка, подписи «по местам», счётчик) с отпечатком sigKey;
+  //  - «отослано» действует, только если отослана та версия подписей, что получилась
+  //    после сведения (sentKey — отпечаток отосланного файла; у старых отметок без
+  //    него — отпечаток подписей самой записи);
+  //  - бланк, распознанный как Claims на другом устройстве, — Claims и здесь;
+  //  - запись, которая есть только в облаке, добавляется (загружена на другом
+  //    устройстве), если здесь её не удаляли (gone); запись только здесь — остаётся.
+  // Чистая функция → { list, changed }.
+  var TS_ROLE_KEYS = ['flag', 'date', 'sig', 'sigs', 'n'];
+  function tsRoleSigned(rec, role, claims) {
+    var f = TS_ROLE_FIELDS[role];
+    if (!rec || !rec[f.flag]) return false;
+    return claims ? timesheetSigsCount(rec, role) > 0 : !!rec[f.sig];
+  }
+  // отпечаток подписей записи: по картинкам, если они ещё в самой записи, иначе
+  // записанный при подписании (sigKey); null — подписей нет
+  function tsRecordKey(rec, claims) {
+    if (timesheetHasRecordSigs(rec)) return timesheetSigKey(timesheetSigSpec(timesheetSigsEffective(rec, null), claims));
+    return (rec && rec.sigKey) || null;
+  }
+  function tsCopy(v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
+  function tsSetOrDrop(o, k, v) { if (v === undefined) delete o[k]; else o[k] = tsCopy(v); }
+  function timesheetMergeRecord(l, c) {
+    var out = tsCopy(l);
+    var claims = l.claims === true || c.claims === true;
+    if (claims) out.claims = true;
+    var adopted = false;
+    TS_ROLES.forEach(function (role) {
+      if (tsRoleSigned(l, role, claims) || !tsRoleSigned(c, role, claims)) return;
+      var f = TS_ROLE_FIELDS[role];
+      TS_ROLE_KEYS.forEach(function (k) { tsSetOrDrop(out, f[k], c[f[k]]); });
+      adopted = true;
+    });
+    if (adopted) {
+      tsSetOrDrop(out, 'sigKey', c.sigKey);
+      tsSetOrDrop(out, 'sigsArchived', c.sigsArchived);
+    }
+    var key = tsRecordKey(out, claims);
+    // день последней подписи итоговой записи (по ролям, которые в ней подписаны)
+    var lastSig = '';
+    TS_ROLES.forEach(function (role) {
+      var f = TS_ROLE_FIELDS[role], d = out[f.flag] && out[f.date];
+      if (d && d > lastSig) lastSig = d;
+    });
+    // «отослано» относится к итоговому набору подписей, если: отпечаток отосланного
+    // файла совпал с ним (точнее не бывает); иначе — НЕ относится, если какая-то
+    // подпись поставлена позже отправки; иначе — если (старая отметка без отпечатка)
+    // совпали подписи или отослано позже последней подписи: отпечаток записи мог
+    // устареть (пересборка, отметка по архиву, старая версия приложения), а отправка
+    // после всех подписей — это отправка именно этой версии. В один день с подписью
+    // при несовпавшем отпечатке — нет: подпись могли поставить и после отправки
+    // (лучше отослать ещё раз, чем не отослать).
+    function sentFits(r) {
+      if (!r.sentMarked) return false;
+      if (r.sentKey && r.sentKey === key) return true;
+      if (r.sentDate && lastSig && lastSig > r.sentDate) return false;
+      if (!r.sentKey && tsRecordKey(r, claims) === key) return true;
+      return !!(r.sentDate && lastSig && r.sentDate > lastSig);
+    }
+    if (sentFits(l)) {
+      // своё «отослано» действует — как есть
+    } else if (sentFits(c)) {
+      out.sentMarked = true;
+      out.sentDate = c.sentDate || null;
+      tsSetOrDrop(out, 'sentKey', c.sentKey);
+    } else if (out.sentMarked) {
+      out.sentMarked = false;
+      out.sentDate = null;
+      delete out.sentKey;
+    }
+    return out;
+  }
+  // baseRecs (необязательно) — отпечатки записей на точке синхронизации {id: хэш},
+  // recHash(rec) — тот же отпечаток для записи: запись, которой нет в облаке, но
+  // которая была там на точке синхронизации и здесь с тех пор не менялась, удалена на
+  // другом устройстве (например, бланк заменён исправленным) — не возвращаем её.
+  function timesheetsMerge(local, cloud, gone, baseRecs, recHash) {
+    var list = (local || []).map(tsCopy), byId = {}, inCloud = {}, changed = false;
+    list.forEach(function (t, i) { if (t && t.id) byId[t.id] = i; });
+    var hasBase = !!baseRecs && typeof recHash === 'function';
+    (cloud || []).forEach(function (c) {
+      if (!c || !c.id) return;
+      inCloud[c.id] = true;
+      if (byId.hasOwnProperty(c.id)) {
+        var i = byId[c.id];
+        // запись здесь не менялась с точки синхронизации — облачная версия новее целиком
+        // (облегчена переносом в архив, переподписана, отослана): берём её как есть
+        var m = hasBase && baseRecs.hasOwnProperty(c.id) && baseRecs[c.id] === recHash(list[i])
+          ? tsCopy(c) : timesheetMergeRecord(list[i], c);
+        if (JSON.stringify(m) !== JSON.stringify(list[i])) { list[i] = m; changed = true; }
+      } else if (!gone || gone.indexOf(c.id) < 0) {
+        list.push(tsCopy(c));
+        changed = true;
+      }
+    });
+    if (hasBase) {
+      list = list.filter(function (t) {
+        var drop = t && t.id && !inCloud[t.id] && baseRecs.hasOwnProperty(t.id) && baseRecs[t.id] === recHash(t);
+        if (drop) changed = true;
+        return !drop;
+      });
+    }
+    return { list: list, changed: changed };
+  }
+
+  // Понятный текст ошибки для экрана (табели подписывают Григорий, 89, и метапелет):
+  // сетевые и технические сообщения («Failed to fetch», «GitHub 401: {…}», ответы
+  // EmailJS) — простыми словами и с тем, что делать; остальное — как есть.
+  function errorText(e) {
+    var m = String((e && typeof e === 'object' ? (e.text || e.message) : e) || '');
+    var st = e && typeof e === 'object' && typeof e.status === 'number' ? e.status : 0;
+    if (/failed to fetch|networkerror|network error|load failed|network request failed|err_internet/i.test(m)) {
+      return 'нет связи с интернетом (или сервер не ответил) — проверьте интернет и попробуйте ещё раз';
+    }
+    if (/GitHub 401|bad credentials/i.test(m)) return 'архив не принял ключ доступа (токен) — сообщите Льву';
+    if (/GitHub 403|rate limit/i.test(m)) return 'архив временно отказал в доступе — подождите несколько минут и попробуйте снова';
+    if (/GitHub 5\d\d/.test(m)) return 'архив (GitHub) временно не отвечает — попробуйте позже';
+    if (/GitHub 404/.test(m)) return 'файл не найден в архиве — сообщите Льву';
+    if (/invalid grant/i.test(m)) return 'почта потеряла доступ к Gmail — сообщите Льву (в EmailJS нужно заново подключить Gmail)';
+    if (/pdf file is empty|empty file/i.test(m)) return 'файл пустой — выберите его заново';
+    if (/invalid pdf|no pdf header|pdf header not found|password|encrypted/i.test(m)) {
+      return 'файл не открывается как PDF (повреждён или защищён паролем)';
+    }
+    if (st === 413 || /too large|size limit|maximum allowed|exceed/i.test(m)) {
+      return 'письмо слишком большое для почтового сервиса — сообщите Льву';
+    }
+    if (st === 402 || st === 429 || /quota|too many requests/i.test(m)) {
+      return 'почтовый сервис временно не принимает письма (лимит) — попробуйте позже или сообщите Льву';
+    }
+    return m || 'неизвестная ошибка';
   }
 
   // Бланков в месяце может быть НЕСКОЛЬКО (с 08/2026 Матав присылает два:
@@ -1308,6 +1452,10 @@ window.MetapelCalc = (function () {
     timesheetSigsMissing: timesheetSigsMissing,
     timesheetsOfMonth: timesheetsOfMonth,
     timesheetGroupStatus: timesheetGroupStatus,
+    timesheetMergeRecord: timesheetMergeRecord,
+    timesheetsMerge: timesheetsMerge,
+    timesheetRecordKey: tsRecordKey,
+    errorText: errorText,
     defaultSettings: defaultSettings,
     sanitizeSettings: sanitizeSettings,
     matavForMonth: matavForMonth,

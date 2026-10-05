@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.13 от 04.10.2026 (подписи табелей хранятся отдельными файлами архива — бэкап и память устройства не разрастаются)';
+  var APP_VERSION = '6.14 от 05.10.2026 (бланки сжимаются без потерь; табели и «отослано» не затираются отставшим устройством; защита собранных подписей)';
 
   // ---------- «сегодня» ----------
 
@@ -120,6 +120,7 @@
   // ---------- большие диалоги, тост, защита от двойных касаний ----------
 
   var confirmCallback = null;
+  var confirmNoCallback = null; // необязательное действие кнопки «нет» (см. appConfirm opts.onNo)
   var actionLockUntil = 0;
   var tapShieldUntil = 0;
 
@@ -131,33 +132,64 @@
     return true;
   }
 
-  function appConfirm(text, yesLabel, onYes) {
+  // opts (необязательно): noLabel — подпись кнопки «нет», onNo — её действие (по
+  // умолчанию просто закрыть окно)
+  // Очередь сообщений: если вопрос / сообщение уже на экране, новое показывается после
+  // него, а не затирает (ответ на открытый вопрос — «Повторить сохранение?», «Заменить
+  // бланк?» — мог быть ещё не дан; затёртый вопрос оставлял бы замки висеть).
+  var dialogQueue = [];
+  function confirmIsOpen() { return $('#modal-confirm').classList.contains('open'); }
+  function queueDialog(text, show) {
+    if ($('#confirm-text').textContent === text) return; // то же самое уже на экране
+    for (var i = 0; i < dialogQueue.length; i++) if (dialogQueue[i].text === text) return;
+    show.text = text;
+    dialogQueue.push(show);
+  }
+  function showNextDialog() {
+    if (!dialogQueue.length || confirmIsOpen()) return;
+    dialogQueue.shift()();
+  }
+  // двойной клик по кнопке, открывшей вопрос, не должен сразу на него ответить
+  // (второй щелчок попадал бы в кнопку вопроса, оказавшуюся под курсором)
+  function shieldNewDialog() { tapShieldUntil = Math.max(tapShieldUntil, Date.now() + 450); }
+
+  function appConfirm(text, yesLabel, onYes, opts) {
+    if (confirmIsOpen()) { queueDialog(text, function () { appConfirm(text, yesLabel, onYes, opts); }); return; }
     confirmCallback = onYes;
+    confirmNoCallback = (opts && opts.onNo) || null;
     $('#confirm-title').textContent = 'Подтверждение';
     $('#confirm-text').textContent = text;
     var yes = $('#confirm-yes');
     yes.textContent = yesLabel || 'Да';
     yes.style.display = '';
-    $('#confirm-no').textContent = 'Нет, вернуться назад';
+    $('#confirm-no').textContent = (opts && opts.noLabel) || 'Нет, вернуться назад';
     $('#modal-confirm').classList.add('open');
     updateScrollLock();
+    shieldNewDialog();
   }
 
   function appAlert(text) {
+    if (confirmIsOpen()) { queueDialog(text, function () { appAlert(text); }); return; }
     confirmCallback = null;
+    confirmNoCallback = null;
     $('#confirm-title').textContent = 'Внимание';
     $('#confirm-text').textContent = text;
     $('#confirm-yes').style.display = 'none';
     $('#confirm-no').textContent = 'Понятно';
     $('#modal-confirm').classList.add('open');
     updateScrollLock();
+    shieldNewDialog();
   }
 
   // закрывает только окно подтверждения (под ним может быть другое окно)
   function closeConfirm() {
     $('#modal-confirm').classList.remove('open');
     confirmCallback = null;
+    confirmNoCallback = null;
     updateScrollLock();
+    // следующее из очереди — чуть позже: сначала колбэк ответа (он может открыть свой
+    // вопрос — продолжение того же действия), и после щита от двойного касания
+    setTimeout(showNextDialog, 650);
   }
 
   var toastTimer = null;
@@ -173,6 +205,14 @@
   var savedScrollY = 0;
   function updateScrollLock() {
     var anyOpen = !!document.querySelector('.modal.open');
+    // пока открыто окно, сообщение-тост показывается вверху (внизу окна — кнопки); а
+    // сообщение, показанное ДО открытия окна («Загружаю бланки…»), уже не нужно — прячем,
+    // иначе оно закрыло бы заголовок окна
+    if (anyOpen && !document.body.classList.contains('modal-open')) {
+      var tst = document.getElementById('toast');
+      if (tst) tst.classList.remove('show');
+    }
+    document.body.classList.toggle('modal-open', anyOpen);
     var locked = document.body.style.position === 'fixed';
     if (anyOpen && !locked) {
       savedScrollY = window.scrollY || 0;
@@ -293,10 +333,15 @@
     // точка на вкладке «Под отчёт», пока за метапелем числятся деньги под отчёт
     var badgeA = $('#badge-advance');
     if (badgeA) badgeA.style.display = advanceBalance() > 0 ? '' : 'none';
-    // бейдж табелей: полностью подписанные, но не отмеченные «Отослано»
-    var tsCount = timesheets.filter(function (t) {
-      return C.timesheetStatus(t) === 'full';
-    }).length;
+    // бейдж табелей: МЕСЯЦЫ, готовые к отправке (все бланки месяца полностью
+    // подписаны, не все отосланы) — а не бланки: у пары, где один бланк ещё не
+    // подписан, отправлять нечего
+    var tsCount = 0, tsSeen = {};
+    timesheets.forEach(function (t) {
+      if (tsSeen[t.month]) return;
+      tsSeen[t.month] = true;
+      if (C.timesheetGroupStatus(C.timesheetsOfMonth(timesheets, t.month)) === 'full') tsCount++;
+    });
     var badgeT = $('#badge-timesheets');
     if (badgeT) { badgeT.textContent = tsCount; badgeT.style.display = tsCount ? '' : 'none'; }
     document.querySelectorAll('.tab').forEach(function (b) {
@@ -731,8 +776,12 @@
   // Новый app.js со старым calc.js / sync.js / модулем подписи из кэша браузера
   // подписал бы не так (или не нашёл бы подписи в архиве) — тогда отказываемся.
   function tsModulesFresh() {
-    return (window.MetapelTimesheet.apiLevel || 0) >= 2 && typeof C.timesheetCareDone === 'function' &&
-      typeof C.timesheetSigsEffective === 'function' && typeof window.MetapelSync.readTimesheetFile === 'function';
+    var T = window.MetapelTimesheet, Y = window.MetapelSync;
+    return (T.apiLevel || 0) >= 3 && typeof T.inspect === 'function' && typeof T.shrink === 'function' &&
+      typeof C.timesheetCareDone === 'function' && typeof C.timesheetSigsEffective === 'function' &&
+      typeof C.errorText === 'function' && typeof C.timesheetRecordKey === 'function' &&
+      typeof C.timesheetsMerge === 'function' &&
+      typeof Y.readTimesheetFile === 'function' && typeof Y.rememberSynced === 'function';
   }
 
   function tsName(t) { return String((t && (t.fileName || t.id)) || ''); }
@@ -759,6 +808,30 @@
   }
   // ошибка с готовым текстом для пользователя (показывается как есть)
   function tsAlertError(text) { var e = new Error(text); e.tsAlert = true; return e; }
+  // понятный текст ошибки — и при старом calc.js из кэша браузера (без errorText):
+  // в обработчике ошибки не должно возникать новой ошибки (иначе «Повторить
+  // сохранение?» не появилось бы, а живые подписи пропали бы молча)
+  function errText(e) {
+    if (typeof C.errorText === 'function') return C.errorText(e);
+    return String((e && typeof e === 'object' ? (e.text || e.message) : e) || 'неизвестная ошибка');
+  }
+
+  // всё ли локальное уже в облаке (хэш = залитому) — честная проверка перед «✓»
+  // (глобальный lastSyncError не годится: его могла поставить чужая застрявшая расписка)
+  function tsSyncedNow() {
+    try { return C.hashString(window.MetapelSync.buildBackupJson(settings, S, 0)) === S.getMeta('lastBackupHash'); }
+    catch (e) { return false; }
+  }
+  // «…, но карточка ещё не в облаке»: при конфликте («облачная копия новее») само не
+  // дошлёт — тогда только «сообщите Льву», без «оставьте приложение открытым»
+  function tsNotSyncedText(what) {
+    var err = S.getMeta('lastSyncError');
+    if (err && /Облачная копия новее/.test(err)) {
+      return what + ', но данные этого устройства не уходят в облако (облачная копия новее). Ничего не нажимайте — сообщите Льву.';
+    }
+    return what + ', но карточка ещё не в облаке' + (err ? ' (' + errText(err) + ')' : '') +
+      '.\nОставьте приложение открытым — оно дошлёт само (авто-синхронизация раз в 15 минут).';
+  }
 
   function findTimesheet(id) {
     for (var i = 0; i < timesheets.length; i++) if (timesheets[i].id === id) return timesheets[i];
@@ -831,7 +904,7 @@
       acts.appendChild(tsBtn('🧪 Тестовая отправка (только себе)', 'btn-light', function () { tsSend(t.id, true); }));
       acts.appendChild(tsBtn('📧 Отослать повторно', 'btn-pay', function () { tsSend(t.id); }));
     }
-    acts.appendChild(tsBtn('🗑 Удалить табель', 'btn-undo', function () { tsDelete(t.id); }));
+    acts.appendChild(tsBtn('🗑 Удалить табель', 'btn-undo', function () { tsDelete(t.id, 0); }));
     card.appendChild(acts);
     return card;
   }
@@ -891,18 +964,25 @@
       acts.appendChild(tsBtn('📧 Отослать повторно (оба)', 'btn-pay', function () { tsSendGroup(month); }));
     }
     mates.forEach(function (t, i) {
-      acts.appendChild(tsBtn('🗑 Удалить бланк ' + (i + 1), 'btn-undo', function () { tsDelete(t.id); }));
+      acts.appendChild(tsBtn('🗑 Удалить бланк ' + (i + 1), 'btn-undo', function () { tsDelete(t.id, i + 1); }));
     });
     card.appendChild(acts);
     return card;
   }
 
-  function tsDelete(id) {
-    appConfirm('Удалить эту карточку табеля? (Файлы в архиве не удаляются.)', '🗑 Удалить', function () {
+  // n — номер бланка в карточке месяца (0 — бланк в месяце один)
+  function tsDelete(id, n) {
+    var t = findTimesheet(id);
+    if (!t) return;
+    var what = n ? 'бланк ' + n + ' («' + tsName(t) + '») из табеля ' + tsMonthSlash(t.month)
+      : 'табель ' + tsMonthSlash(t.month) + ' («' + tsName(t) + '»)';
+    appConfirm('Удалить ' + what + '?' +
+      (t.caregiverSigned || t.familySigned ? '\nЕго подписи пропадут с карточки.' : '') +
+      '\nФайлы в архиве не удаляются.', '🗑 Удалить', function () {
       S.deleteTimesheet(id);
       reloadData();
       render();
-      showToast('Табель удалён');
+      showToast(n ? 'Бланк удалён' : 'Табель удалён');
       runSync();
     });
   }
@@ -1005,13 +1085,22 @@
     var p = Promise.resolve(origU8);
     function role(kind, one, many, what) {
       var places = slots.filter(function (s) { return s.kind === kind; });
-      if (!places.length) return;
+      if (!places.length) {
+        // подписи роли есть, а мест для них в бланке нет (бланк разобран старой копией
+        // модуля подписи, не тот бланк) — молча собрать бланк без них нельзя: файл
+        // ушёл бы в Матав без этих подписей
+        if ((many && many.length) || one) {
+          p = p.then(function () { throw new Error('в бланке не нашлось мест для подписей ' + what); });
+        }
+        return;
+      }
       if (many && many.length) {
         // строго одна подпись на место: «растянуть» последнюю на оставшиеся места
-        // значило бы вернуть в бланк одинаковые подписи
-        if (many.length < places.length) {
+        // значило бы вернуть в бланк одинаковые подписи, а лишние означают, что
+        // подписи собраны для другого бланка
+        if (many.length !== places.length) {
           p = p.then(function () {
-            throw new Error('подписей ' + what + ' (' + many.length + ') меньше, чем мест в бланке (' + places.length + ')');
+            throw new Error('подписей ' + what + ' (' + many.length + ') не столько, сколько мест в бланке (' + places.length + ')');
           });
           return;
         }
@@ -1028,9 +1117,13 @@
   }
 
   var tsPreviewSave = null;
+  // сколько живых подписей пропадёт, если предпросмотр закрыть без сохранения
+  // (тогда «Отмена» сначала переспросит)
+  var tsPreviewSigs = 0;
   function tsShowPreview(signedU8, onSave, opts) {
     opts = opts || {};
     tsPreviewSave = onSave;
+    tsPreviewSigs = opts.sigCount || 0;
     // тексты ставим КАЖДЫЙ раз (иначе после группового предпросмотра одиночный
     // унаследовал бы «Сохранить оба бланка»)
     $('#ts-preview-save').textContent = opts.btnText || '✓ Сохранить подписанный табель';
@@ -1038,8 +1131,13 @@
     if (hint) hint.textContent = opts.hintText || 'Проверьте, что подписи встали по местам. Затем сохраните.';
     $('#modal-ts-preview').classList.add('open');
     updateScrollLock();
-    window.MetapelTimesheet.render(signedU8, $('#ts-preview-canvas'), 1.5)
-      .catch(function (e) { appAlert('Предпросмотр не отрисовался: ' + (e && e.message || e)); });
+    var wrap = document.querySelector('#modal-ts-preview .ts-preview-wrap');
+    if (wrap) wrap.scrollTop = 0;
+    window.MetapelTimesheet.render(signedU8, $('#ts-preview-canvas'), 1.5).then(function () {
+      // на невысоком экране бланк не помещается — показываем таблицу с подписями, а не шапку
+      var cv = $('#ts-preview-canvas');
+      if (wrap && cv && cv.clientHeight > wrap.clientHeight + 20) wrap.scrollTop = Math.round(cv.clientHeight * 0.2);
+    }).catch(function (e) { appAlert('Предпросмотр не отрисовался: ' + errText(e)); });
   }
 
   function tsSlotsOf(job, kind) {
@@ -1075,24 +1173,34 @@
   // Занятость подписания: пока бланки грузятся, собираются и сохраняются, окна на
   // экране нет и карточка доступна для нажатий — второе нажатие игнорируем, иначе
   // второй поток перехватил бы окно подписи. Во время открытого окна карточку и
-  // так закрывает затемнение. От «вечной» занятости страхует истечение через минуту.
+  // так закрывает затемнение. От «вечной» занятости страхует истечение через 3 минуты;
+  // долгие шаги (сохранение бланков при медленной сети) продлевают её заново, иначе
+  // истёкшая на середине занятость пустила бы второй поток.
   var tsBusyUntil = 0;
   function tsBusy() { return Date.now() < tsBusyUntil; }
-  function tsSetBusy(on) { tsBusyUntil = on ? Date.now() + 60000 : 0; }
+  function tsSetBusy(on) { tsBusyUntil = on ? Date.now() + 3 * 60000 : 0; }
 
   // Перед пересборкой: свежие записи бланков + подписи из облака для ВСЕХ бланков
   // месяца. Выгрузка после подписи отдаёт в облако записи месяца целиком, и чужая
   // подпись (с другого устройства), которой нет в устаревшей локальной записи, была
   // бы затёрта — в том числе на бланке, который сейчас не пересобирается.
+  // Сначала обычная синхронизация: «чистое» устройство подтянет облако — за время
+  // серии подписей (21+5 окон, минуты) на другом устройстве могли отметить оплату,
+  // загрузить или отослать бланк. Без этого сохранение подписи упиралось бы в
+  // «облачная копия новее» (красный баннер) или откатывало бы чужое «отослано».
   function tsFreshen(jobs, month) {
-    reloadData();
-    for (var i = 0; i < jobs.length; i++) {
-      var f = findTimesheet(jobs[i].t.id);
-      // бланк удалили (на другом устройстве) прямо во время подписания
-      if (!f) return Promise.reject(new Error('бланк «' + (jobs[i].t.fileName || jobs[i].t.id) + '» удалён — подписание отменено'));
-      jobs[i].t = f;
-    }
-    return tsAdoptCloudSigs(C.timesheetsOfMonth(timesheets, month));
+    // шаг необязательный: зависшая сеть не должна держать подписи в памяти без конца
+    var syncStep = Promise.race([Promise.resolve(runSync()), new Promise(function (r) { setTimeout(r, 20000); })]);
+    return syncStep.catch(function () {}).then(function () {
+      reloadData();
+      for (var i = 0; i < jobs.length; i++) {
+        var f = findTimesheet(jobs[i].t.id);
+        // бланк удалили (на другом устройстве) прямо во время подписания
+        if (!f) throw new Error('бланк «' + (jobs[i].t.fileName || jobs[i].t.id) + '» удалён — подписание отменено');
+        jobs[i].t = f;
+      }
+      return tsAdoptCloudSigs(C.timesheetsOfMonth(timesheets, month));
+    });
   }
 
   var TS_NO_CLAIMS = 'В этом месяце два бланка, но бланк Claims Conference не распознан ' +
@@ -1132,8 +1240,14 @@
   // одинаковые подписи — метапелет расписывается ОТДЕЛЬНО за каждый рабочий день,
   // Григорий — ОТДЕЛЬНО за каждую неделю (серии окон, живые подписи).
   function tsSignGroup(month, signer) {
-    if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена) — подпись табеля недоступна. Введите токен в настройках.'); return; }
+    if (!window.MetapelSync.isOn(settings)) { appAlert('Архив не настроен (нет токена) — подпись табеля недоступна. Сообщите Льву.'); return; }
     if (tsBusy()) { showToast('Подождите — идёт подписание…'); return; }
+    if (tsLivePending()) {
+      appAlert(document.querySelector('.modal.open') || tsBusy()
+        ? 'Сначала сохраните (или отмените) уже поставленные подписи — они ещё не сохранены.'
+        : 'Предыдущие подписи ещё сохраняются — подождите минуту и попробуйте снова.');
+      return;
+    }
     // новый app.js со старым модулем (или calc.js / sync.js) из кэша подписал бы не так
     if (!tsModulesFresh()) { appAlert(TS_STALE); return; }
     var mates = C.timesheetsOfMonth(timesheets, month);
@@ -1154,7 +1268,15 @@
         var u8 = window.MetapelTimesheet.u8FromDataUrl(r[0].pdf);
         return window.MetapelTimesheet.parse(u8, { claimsCare: true }).then(function (parsed) {
           if (typeof parsed.claims !== 'boolean') throw new Error(TS_STALE);
-          if (!parsed.slots.length) throw new Error('в бланке «' + (t.fileName || t.id) + '» не нашлось мест для подписи');
+          if (!parsed.slots.length) {
+            throw tsAlertError('В бланке «' + tsName(t) + '» не отмечено ни одного рабочего дня — подписывать нечего. Сообщите Льву.');
+          }
+          // бланк, однажды распознанный как Claims, при подписи должен им и остаться
+          // (иначе подпись «по-обычному» молча сбросила бы отметку Claims)
+          if (t.claims === true && parsed.claims !== true) {
+            throw tsAlertError('Бланк «' + tsName(t) + '» раньше распознавался как Claims Conference, а сейчас — нет. ' +
+              'Подписывать не буду, чтобы не ошибиться, — сообщите Льву.');
+          }
           return { t: t, u8: u8, slots: parsed.slots, claims: parsed.claims, sigs: r[1] };
         });
       });
@@ -1189,7 +1311,7 @@
       render();
       runSync();
       var msg = (e && e.message) || String(e);
-      appAlert(e && e.tsAlert ? msg : msg === TS_STALE || msg === TS_NO_CLAIMS ? msg : 'Не удалось загрузить/разобрать бланки: ' + msg);
+      appAlert(e && e.tsAlert ? msg : msg === TS_STALE || msg === TS_NO_CLAIMS ? msg : 'Не удалось загрузить бланки: ' + errText(e));
     });
   }
 
@@ -1210,7 +1332,7 @@
       before.claims = j.claims;
       for (var k in p) if (p.hasOwnProperty(k)) after[k] = p[k];
       if ((!tsCareDone(before) && tsCareDone(after)) || (!tsFamDone(before) && tsFamDone(after))) {
-        if (j.t.sentMarked) { p.sentMarked = false; p.sentDate = null; }
+        if (j.t.sentMarked) { p.sentMarked = false; p.sentDate = null; p.sentKey = undefined; }
       }
       todo.push({ job: j, patch: p });
     });
@@ -1225,6 +1347,9 @@
             fileName: h.job.t.fileName, month: h.job.t.month, api: 2, sigKey: C.timesheetSigKey(spec)
           });
         }).then(function () {
+          // отпечаток записи — по полному набору, из которого только что собран файл
+          // (иначе «отослано» при сведении с облаком сверялось бы с устаревшим)
+          h.patch.sigKey = C.timesheetSigKey(spec);
           S.updateTimesheet(h.job.t.id, h.patch);
           for (var k in h.patch) if (h.patch.hasOwnProperty(k)) h.job.t[k] = h.patch[k];
         });
@@ -1249,13 +1374,13 @@
   // бланка Claims. «Прервать» в любом окне отменяет ВСЮ серию — ничего не
   // сохраняется. Подпись, точь-в-точь совпавшая с подписью другого места, — это
   // одинаковые касания, а не живая роспись: то же место просим подписать заново.
-  // o: { n, unit, title(k), desc(k), toast(k), dupText, abortText, color, onDone(sigs) }
+  // o: { n, unit, title(k), desc(k), dupText, abortText, color, onDone(sigs) }
   function tsSignSeries(o) {
     var sigs = [];
     function ask(k) {
       openFingerSign(o.title(k), o.desc(k),
         k + 1 < o.n ? '✓ Готово — дальше ' + o.unit + ' ' + (k + 2) : '✓ Готово',
-        'Распишитесь пальцем в рамке и нажмите «Готово».',
+        'Распишитесь ' + signHow() + ' в рамке и нажмите «Готово».',
         function (sig) {
           if (sigs.indexOf(sig) >= 0) {
             appAlert(o.dupText);
@@ -1264,7 +1389,8 @@
           }
           sigs.push(sig);
           if (k + 1 < o.n) {
-            showToast(o.toast(k));
+            // без тоста «день k подписан»: он закрывал бы заголовок следующего окна, а
+            // тот и так говорит, за какой день расписываться теперь
             // следующее окно — сразу, без паузы: в паузе окна нет и карточка под
             // ним открыта для случайного нажатия; двойное касание «Готово» гасит
             // щит от касаний (0,5 с после закрытия окна)
@@ -1283,6 +1409,20 @@
   }
   // сколько живых подписей уже собрано в текущей серии окон (для вопроса при «Прервать»)
   var tsSeriesCount = 0;
+  // Живые подписи, собранные серией и ещё не сохранённые (расстановка, предпросмотр,
+  // сохранение, вопрос «Повторить сохранение?»): закрытие вкладки переспросит, новая
+  // серия не начнётся. Снимается после сохранения или явного «не сохранять». Если
+  // флаг почему-то «повис» (10 минут, ни окна, ни занятости) — не мешает работать.
+  // Метка серии (tsSetLive возвращает её): снимает флаг только «своя» серия — сохранение,
+  // зависшее и завершившееся позже, не снимет флаг уже следующей серии.
+  var tsLiveSigs = 0, tsLiveSigsAt = 0, tsLiveToken = 0;
+  function tsSetLive(n) { tsLiveSigs = n; tsLiveSigsAt = Date.now(); return ++tsLiveToken; }
+  function tsClearLive(token) { if (token === undefined || token === tsLiveToken) tsLiveSigs = 0; }
+  function tsLivePending() {
+    if (!tsLiveSigs) return false;
+    if (Date.now() - tsLiveSigsAt > 10 * 60000 && !document.querySelector('.modal.open') && !tsBusy()) { tsLiveSigs = 0; return false; }
+    return true;
+  }
 
   // Метапелет: на обычном бланке — одна подпись во все рабочие дни (как раньше).
   // Если среди бланков есть Claims — подписи собираются ПО ОДНОЙ на каждый его
@@ -1305,7 +1445,7 @@
           render();
           showToast('✓ Отмечено');
           runSync();
-        }).catch(function (e) { tsSetBusy(false); appAlert('Не удалось отметить: ' + (e && e.message || e)); });
+        }).catch(function (e) { tsSetBusy(false); appAlert('Не удалось отметить: ' + errText(e)); });
       });
       return;
     }
@@ -1314,6 +1454,7 @@
 
     function finish(sigs) {
       var items = [];
+      var live = tsSetLive(sigs.length);
       tsSetBusy(true);
       showToast('Расставляю подписи…');
       tsFreshen(jobs, month).then(function () {
@@ -1328,7 +1469,7 @@
       }).then(function (signedList) {
         signedList.forEach(function (u8, i) { items[i].u8 = u8; });
         var all = items.concat(flagJobs.map(function (j) { return { job: j, flag: flagPatch(j) }; }));
-        var opts = null;
+        var opts = {};
         if (claimsJob) {
           opts = { btnText: all.length > 1 ? '✓ Сохранить оба бланка' : null,
             hintText: 'Показан бланк Claims Conference: в каждом рабочем дне — своя подпись метапелет.' +
@@ -1338,16 +1479,17 @@
             hintText: 'Показан бланк 1 из ' + stampJobs.length + ' — во втором подписи встанут так же. Затем сохраните.' };
         }
         tsSetBusy(false);
+        opts.sigCount = sigs.length;
         tsShowPreview(signedList[claimsJob ? stampJobs.indexOf(claimsJob) : 0],
-          function () { tsSaveSignedGroup(all); }, opts);
-      }).catch(function (e) { tsSetBusy(false); appAlert(tsSignErrorText(e)); });
+          function () { tsSaveSignedGroup(tsClaimsFirst(all), null, live); }, opts);
+      }).catch(function (e) { tsSetBusy(false); tsClearLive(live); appAlert(tsSignErrorText(e)); });
     }
 
     if (!days.length) {
       openFingerSign('✍ Подпись Метапелет',
         'Распишитесь <b>один раз</b> — синяя подпись Джамшида встанет в каждый рабочий день' +
           (stampJobs.length > 1 ? ' <b>в обоих бланках месяца</b>.' : '.'),
-        '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».',
+        '✓ Готово', 'Распишитесь ' + signHow() + ' в рамке и нажмите «Готово».',
         function (sig) { finish([sig]); }, tsInkColor('caregiver'));
       return;
     }
@@ -1359,7 +1501,6 @@
           'Сейчас — день ' + (k + 1) + ': <b>' + esc(tsDayText(month, days[k].day)) + '</b>.' +
           (k === 0 && stampJobs.length > 1 ? '<br>Эта подпись встанет и во все дни другого бланка.' : '');
       },
-      toast: function (k) { return '✓ День ' + (k + 1) + ' из ' + days.length + ' подписан'; },
       dupText: 'Эта подпись точь-в-точь совпадает с подписью другого дня. Распишитесь за этот день ещё раз.',
       abortText: 'Прервать (все дни — заново)',
       onDone: finish
@@ -1375,6 +1516,7 @@
 
     function finish(sigs) {
       var items = [];
+      var live = tsSetLive(sigs.length);
       tsSetBusy(true);
       showToast('Расставляю подписи…');
       tsFreshen(jobs, month).then(function () {
@@ -1387,7 +1529,7 @@
         return Promise.all(items.map(function (it) { return tsBuildSigned(it.job.u8, it.job.slots, C.timesheetSigSpec(it.eff, it.job.claims)); }));
       }).then(function (signedList) {
         signedList.forEach(function (u8, i) { items[i].u8 = u8; });
-        var opts = null;
+        var opts = {};
         if (claimsJob) {
           opts = { btnText: jobs.length > 1 ? '✓ Сохранить оба бланка' : null,
             hintText: 'Показан бланк Claims Conference: в каждой неделе — своя подпись.' +
@@ -1397,16 +1539,17 @@
             hintText: 'Показан бланк 1 из ' + jobs.length + ' — во втором подписи встанут так же. Затем сохраните.' };
         }
         tsSetBusy(false);
+        opts.sigCount = sigs.length;
         tsShowPreview(signedList[claimsJob ? jobs.indexOf(claimsJob) : 0],
-          function () { tsSaveSignedGroup(items); }, opts);
-      }).catch(function (e) { tsSetBusy(false); appAlert(tsSignErrorText(e)); });
+          function () { tsSaveSignedGroup(tsClaimsFirst(items), null, live); }, opts);
+      }).catch(function (e) { tsSetBusy(false); tsClearLive(live); appAlert(tsSignErrorText(e)); });
     }
 
     if (!weeks.length) {
       openFingerSign('✍ Подпись за Григория',
         'Распишитесь <b>один раз</b> за Григория — чёрная недельная подпись встанет на каждую рабочую неделю' +
           (jobs.length > 1 ? ' <b>в обоих бланках месяца</b>.' : '.'),
-        '✓ Готово', 'Распишитесь пальцем в рамке и нажмите «Готово».',
+        '✓ Готово', 'Распишитесь ' + signHow() + ' в рамке и нажмите «Готово».',
         function (sig) { finish([sig]); }, tsInkColor('family'));
       return;
     }
@@ -1418,7 +1561,6 @@
           'Сейчас — неделя ' + (k + 1) + ': <b>' + esc(tsWeekDaysText(month, weeks[k].days)) + '</b>.' +
           (k === 0 && jobs.length > 1 ? '<br>Эта подпись встанет и во все недели другого бланка.' : '');
       },
-      toast: function (k) { return '✓ Неделя ' + (k + 1) + ' из ' + weeks.length + ' подписана'; },
       dupText: 'Эта подпись точь-в-точь совпадает с подписью другой недели. Распишитесь за эту неделю ещё раз.',
       abortText: 'Прервать (все недели — заново)',
       onDone: finish
@@ -1437,7 +1579,13 @@
     return { job: job, role: role, own: own, eff: eff };
   }
   function tsSignErrorText(e) {
-    return e && e.tsAlert ? e.message : 'Ошибка расстановки подписи: ' + (e && e.message || e);
+    return e && e.tsAlert ? e.message : 'Ошибка расстановки подписи: ' + errText(e);
+  }
+  // Бланк Claims сохраняется ПЕРВЫМ: при обрыве на середине несохранённым останется
+  // то, что проще переподписать (одна подпись обычного бланка, а не 21 по дням).
+  function tsClaimsFirst(items) {
+    return items.filter(function (it) { return it.job.claims; })
+      .concat(items.filter(function (it) { return !it.job.claims; }));
   }
 
   // Сохраняет подпись роли на одном бланке:
@@ -1489,7 +1637,7 @@
           }
           // переподписанный бланк — уже НЕ та версия, что ушла в Матав: снимаем
           // «отослано», чтобы новую версию не забыли отправить
-          if (cur.sentMarked) { patch.sentMarked = false; patch.sentDate = null; }
+          if (cur.sentMarked) { patch.sentMarked = false; patch.sentDate = null; patch.sentKey = undefined; }
           S.updateTimesheet(id, patch);
         });
       });
@@ -1509,7 +1657,8 @@
   // расписываться заново (до 21 подписи) не нужно. Бланк, который сохранить
   // нельзя в принципе (удалён, нет подписей другой роли в архиве), пропускается —
   // остальные сохраняются; итог перечисляет пропущенные.
-  function tsSaveSignedGroup(items, skipped) {
+  // live — метка серии, чьи подписи сохраняются (см. tsSetLive)
+  function tsSaveSignedGroup(items, skipped, live) {
     skipped = skipped || [];
     tsSetBusy(true);
     showToast('Сохраняю подписанные бланки…');
@@ -1517,15 +1666,23 @@
     function next() {
       if (i >= items.length) {
         tsSetBusy(false);
+        tsClearLive(live);
         reloadData();
         render();
         if (skipped.length) appAlert('Не сохранено:\n' + skipped.join('\n'));
-        else showToast(items.length > 1 ? '✓ Подписи сохранены' : '✓ Подпись сохранена');
-        runSync();
+        var done = items.length > 1 ? 'Подписи сохранены' : 'Подпись сохранена';
+        // «✓» — только когда и карточка уехала в облако (как у загрузки бланка); сами
+        // подписи и подписанный бланк к этому моменту уже в архиве
+        runSync().then(function () {
+          if (skipped.length) return;
+          if (tsSyncedNow()) { showToast('✓ ' + done); return; }
+          appAlert(tsNotSyncedText(done + ' в архиве') + ' Расписываться заново не нужно.');
+        });
         return;
       }
       var at = i, it = items[i];
       i++;
+      tsSetBusy(true); // продлить занятость на время сохранения этого бланка
       if (!it.own) { S.updateTimesheet(it.job.t.id, it.flag); next(); return; }
       tsCommitSigned(it, 0).then(next, function (e) {
         if (e && e.tsAlert) { skipped.push(e.message); next(); return; }
@@ -1533,10 +1690,17 @@
         reloadData();
         render();
         runSync();
-        appConfirm('Бланк «' + tsName(it.job.t) + '» не сохранился: ' + (e && e.message || e) +
+        var retry = function () { tsSaveSignedGroup(items.slice(at), skipped, live); };
+        // «Не сохранять» выбрасывает живые подписи (у Claims — до 21+5) — переспрашиваем,
+        // и верхняя кнопка второго вопроса — снова «повторить»
+        appConfirm('Бланк «' + tsName(it.job.t) + '» не сохранился: ' + errText(e) +
           (skipped.length ? '\nНе сохранено и повтором не исправить:\n' + skipped.join('\n') : '') +
-          '\nОстальные сохранённые бланки в порядке. Повторить сохранение? Расписываться заново не нужно.',
-          '🔁 Повторить сохранение', function () { tsSaveSignedGroup(items.slice(at), skipped); });
+          (at > 0 ? '\nОстальные сохранённые бланки в порядке.' : '') + '\nПовторить сохранение? Расписываться заново не нужно.',
+          '🔁 Повторить сохранение', retry, { noLabel: 'Не сохранять', onNo: function () {
+            appConfirm('Точно не сохранять? Только что поставленные подписи пропадут — расписываться придётся заново.',
+              'Да, не сохранять', function () { tsClearLive(live); },
+              { noLabel: '🔁 Нет — повторить сохранение', onNo: retry });
+          } });
       });
     }
     next();
@@ -1566,10 +1730,13 @@
     ids.forEach(function (id) { chain = chain.then(function () { return tsRebuildOne(id); }); });
     chain.then(function () {
       tsSetBusy(false);
+      reloadData();
+      render();
+      runSync();
       showToast('✓ Пересобрано из сохранённых подписей — ' + (forDownload ? 'скачайте' : 'отправьте') + ' ещё раз');
     }).catch(function (e) {
       tsSetBusy(false);
-      appAlert(e && e.tsAlert ? e.message : 'Не удалось пересобрать бланк: ' + (e && e.message || e));
+      appAlert(e && e.tsAlert ? e.message : 'Не удалось пересобрать бланк: ' + errText(e));
     });
   }
   function tsRebuildOne(id) {
@@ -1583,6 +1750,14 @@
     }).then(function (obj) {
       var u8 = window.MetapelTimesheet.u8FromDataUrl(obj.pdf);
       return window.MetapelTimesheet.parse(u8, { claimsCare: true }).then(function (parsed) {
+        // запись и бланк должны сходиться в том, Claims ли это: иначе подписи собрались
+        // бы не по тем местам (или без подписей по дням)
+        if ((t.claims === true) !== (parsed.claims === true)) {
+          throw tsAlertError('Бланк «' + tsName(t) + '» ' + (t.claims === true
+            ? 'числится бланком Claims Conference, а при разборе им не распознан'
+            : 'при разборе распознан как Claims Conference, а числится обычным') +
+            '. Пересобирать не буду, чтобы не ошибиться, — сообщите Льву.');
+        }
         return tsBuildSigned(u8, parsed.slots, spec);
       });
     }).then(function (signedU8) {
@@ -1590,6 +1765,9 @@
         pdf: window.MetapelTimesheet.bytesToDataUrl(signedU8, 'application/pdf'),
         fileName: t.fileName, month: t.month, api: 2, sigKey: C.timesheetSigKey(spec)
       });
+    }).then(function () {
+      // отпечаток записи — по набору, из которого собран файл
+      S.updateTimesheet(id, { sigKey: C.timesheetSigKey(spec) });
     });
   }
   // ошибка этапа «бланк и подписи из архива» — не ошибка EmailJS (в Матав ничего не ушло)
@@ -1598,7 +1776,7 @@
     throw e;
   }
   function tsArchiveFailText(e) {
-    return 'Не удалось получить подписанный бланк или подписи из архива: ' + (e && e.message || e) +
+    return 'Не удалось получить подписанный бланк или подписи из архива: ' + errText(e) +
       '\nВ Матав ничего не ушло. Проверьте интернет и попробуйте ещё раз.';
   }
   // true — файл -signed собран НЕ из подписей бланка eff. Бланк Claims сверяется
@@ -1622,6 +1800,137 @@
     var prob = isTest ? null : tsClaimsProblem(t, eff);
     if (prob) throw tsAlertError(tsClaimsBlockText(n, prob));
     return eff;
+  }
+
+  // ---------- загрузка бланка ----------
+  //
+  // Бланк сначала разбирается (одно открытие PDF, MetapelTimesheet.inspect), потом
+  // проверяется против бланков месяца, и только затем PDF уходит в архив, а карточка
+  // появляется: повторно загруженный тот же файл, уже подписанный (скачанный из
+  // приложения) файл, чужой PDF и бланк без рабочих дней не загружаются; бланк того
+  // же типа в месяце (исправленный от Матав) — с вопросом «заменить?»; нераспознанный
+  // период не подменяется молча текущим месяцем. Пока бланк загружается, второй ждёт.
+  var tsUploadingUntil = 0; // замок одной загрузки (истекает через 2 минуты)
+  function tsUploadFile(file) {
+    if (!tsModulesFresh()) { appAlert(TS_STALE); return; }
+    if (Date.now() < tsUploadingUntil) { showToast('Подождите — загружается предыдущий бланк…'); return; }
+    tsUploadingUntil = Date.now() + 2 * 60000;
+    function done() { tsUploadingUntil = 0; }
+    var reader = new FileReader();
+    reader.onerror = function () {
+      done();
+      appAlert('Не удалось прочитать файл «' + file.name + '». Выберите его ещё раз.');
+    };
+    reader.onload = function () { tsUploadData(file.name, String(reader.result || ''), done); };
+    reader.readAsDataURL(file);
+  }
+  function tsUploadData(fileName, dataUrl, done) {
+    var fileHash = C.hashString(dataUrl.slice(dataUrl.indexOf(',') + 1));
+    var dup = timesheets.filter(function (t) { return t.fileHash === fileHash; })[0];
+    if (dup) {
+      done();
+      appAlert('Этот бланк уже загружен — табель ' + tsMonthSlash(dup.month) + ' («' + tsName(dup) + '»). Повторно загружать не нужно.');
+      return;
+    }
+    showToast('Читаю бланк…');
+    window.MetapelTimesheet.inspect(window.MetapelTimesheet.u8FromDataUrl(dataUrl)).then(function (info) {
+      if (!info.matav) {
+        done();
+        appAlert(info.error + '\nЗагрузите PDF, который прислал Матав.');
+        return;
+      }
+      if (info.signedByApp) {
+        done();
+        appAlert('Это уже ПОДПИСАННЫЙ бланк (скачанный из приложения). Загружайте исходный PDF, который прислал Матав.');
+        return;
+      }
+      if (!info.workDays) {
+        done();
+        appAlert('В бланке не отмечено ни одного рабочего дня — подписывать нечего.');
+        return;
+      }
+      // файл пересохранён программой pdf-lib (ею собирает подписанные бланки и само
+      // приложение, но без своей метки): возможно, подписанный бланк из старой версии
+      if (info.pdfLib) {
+        appConfirm('Похоже, этот файл уже собран программой (возможно, это подписанный бланк из старой версии приложения). ' +
+          'Загружать нужно исходный PDF, который прислал Матав. Всё равно загрузить?', 'Всё равно загрузить',
+          function () { tsUploadAfterCheck(fileName, dataUrl, fileHash, info, done); }, { onNo: done });
+        return;
+      }
+      tsUploadAfterCheck(fileName, dataUrl, fileHash, info, done);
+    }, function (e) {
+      done();
+      appAlert('Не удалось открыть бланк: ' + errText(e) + '\nЗагрузите его ещё раз.');
+    });
+  }
+  // бланк проверен — определяем месяц (бланк Claims Conference помечается сразу:
+  // на карточке видно ДО подписания)
+  function tsUploadAfterCheck(fileName, dataUrl, fileHash, info, done) {
+    if (info.month) { tsUploadMonth(fileName, dataUrl, fileHash, info, info.month, done); return; }
+    // период не распознан: табель сдают за прошлый месяц — спросим, а не подставим
+    // молча текущий (он попал бы в тему письма, имена файлов и дни недели в окнах)
+    var prev = C.addMonthsISO(today(), -1).slice(0, 7);
+    appConfirm('Не удалось прочитать период бланка. Это табель за ' + tsMonthSlash(prev) + '?', 'Да, за ' + tsMonthSlash(prev),
+      function () { tsUploadMonth(fileName, dataUrl, fileHash, info, prev, done); },
+      { onNo: function () { done(); appAlert('Бланк не загружен.'); } });
+  }
+  function tsUploadMonth(fileName, dataUrl, fileHash, info, month, done) {
+    var mates = C.timesheetsOfMonth(timesheets, month);
+    var isClaims = info.claims === true;
+    var same = mates.filter(function (t) { return (t.claims === true) === isClaims; });
+    if (same.length === 1) {
+      // бланк того же типа в месяце уже есть — значит, Матав прислал исправленный
+      var old = same[0];
+      var who = [old.caregiverSigned ? 'Джамшида' : '', old.familySigned ? 'Григория' : ''].filter(Boolean).join(' и ');
+      var replace = function () { tsUploadPut(fileName, dataUrl, fileHash, info, month, old.id, done); };
+      appConfirm('Новый файл распознан как ' + (isClaims ? 'бланк Claims Conference' : 'ОБЫЧНЫЙ бланк (не Claims)') + '. ' +
+        'В табеле ' + tsMonthSlash(month) + ' такой уже есть: «' + tsName(old) + '» (загружен ' + C.fmtDate(old.uploadedDate) + ').\nЗаменить его новым?' +
+        (!isClaims && mates.length === 1 ? '\nЕсли новый файл — бланк Claims Conference, не заменяйте: приложение его не распознало (Матав мог изменить бланк).' : '') +
+        (old.sentMarked ? '\nСтарый бланк уже отослан в Матав — новый нужно будет отослать.' : ''),
+        '🔁 Заменить', who ? function () {
+          appConfirm('У старого бланка есть подписи ' + who + ' — к новому они не перейдут, расписываться придётся заново. Точно заменить?',
+            'Да, заменить', replace, { onNo: done });
+        } : replace,
+        { onNo: done });
+      return;
+    }
+    if (same.length > 1 || mates.length >= 2) {
+      done();
+      appAlert('В табеле ' + tsMonthSlash(month) + ' уже ' + mates.length + ' бланка — третий не нужен. ' +
+        'Если этот бланк заменяет один из них — удалите старый на карточке и загрузите этот снова.');
+      return;
+    }
+    tsUploadPut(fileName, dataUrl, fileHash, info, month, null, done);
+  }
+  // Сначала PDF в архив, потом карточка: карточки без файла в архиве (сбой сети) не
+  // бывает даже на миг — иначе авто-синхронизация могла бы унести её в облако.
+  function tsUploadPut(fileName, dataUrl, fileHash, info, month, replaceId, done) {
+    var id = 'ts-' + Date.now();
+    var rec = { id: id, month: month, fileName: fileName, uploadedDate: today(), fileHash: fileHash,
+      caregiverSigned: false, caregiverSignedDate: null, familySigned: false,
+      familySignedDate: null, sentMarked: false, sentDate: null };
+    if (typeof info.claims === 'boolean') rec.claims = info.claims;
+    showToast('Загружаю бланк в архив…');
+    window.MetapelSync.putTimesheetFile(settings, id, '', { pdf: dataUrl, fileName: fileName, month: month }).then(function () {
+      if (replaceId) S.deleteTimesheet(replaceId);
+      S.addTimesheet(rec);
+      done();
+      reloadData();
+      render();
+      showToast('PDF в архиве, отправляю карточку в облако…');
+      // «✓» — только когда карточка реально ушла в облако (инцидент 15.09: тост был до
+      // синхронизации, приложение закрыли — и на других устройствах табеля не было)
+      return runSync().then(function () {
+        if (tsSyncedNow()) {
+          showToast('✓ ' + (replaceId ? 'Бланк заменён' : 'Табель загружен') + ' (' + tsMonthSlash(month) + ')');
+        } else {
+          appAlert(tsNotSyncedText('PDF табеля в архиве') + ' Повторно загружать не нужно.');
+        }
+      });
+    }, function (err) {
+      done();
+      appAlert('Не удалось сохранить бланк в архив: ' + errText(err) + '\nБланк не загружен — попробуйте ещё раз.');
+    });
   }
 
   // ---------- скачивание / отправка (Этап 3) ----------
@@ -1650,12 +1959,32 @@
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { URL.revokeObjectURL(url); a.parentNode && a.parentNode.removeChild(a); }, 1500);
-    }).catch(function (e) { appAlert('Не удалось скачать: ' + (e && e.message || e)); });
+    }).catch(function (e) { appAlert('Не удалось скачать: ' + errText(e)); });
   }
 
+  // поля «отослано»: fileKey — отпечаток отосланного файла -signed (отправка через
+  // EmailJS); при ручной отметке — отпечаток подписей самой записи. По нему сведение
+  // с облаком понимает, ТА ЛИ версия подписей отослана (calc.js timesheetsMerge).
+  function tsSentPatch(t, fileKey) {
+    var p = { sentMarked: true, sentDate: today(),
+      sentKey: fileKey || (typeof C.timesheetRecordKey === 'function' ? C.timesheetRecordKey(t, t.claims === true) : t.sigKey) || undefined };
+    // отпечаток записи — по отосланному файлу: перед отправкой он сверен с подписями
+    // бланка, а запись после пересборки / отметки по архиву могла его не знать
+    if (fileKey) p.sigKey = fileKey;
+    return p;
+  }
+  // ручная отметка (запасной путь после сбоя EmailJS) — с той же проверкой Claims, что
+  // у отправки: бланк, подписанный не так, как требуется, «отосланным» не числим
   function tsMarkSent(id) {
+    if (!tsModulesFresh()) { appAlert(TS_STALE); return; }
+    var t0 = findTimesheet(id);
+    if (!t0) return;
+    var prob = tsClaimsProblem(t0);
+    if (prob) { appAlert(tsClaimsBlockText(0, prob, true)); return; }
     appConfirm('Отметить табель как отосланный в Матав?', '✓ Отослано', function () {
-      S.updateTimesheet(id, { sentMarked: true, sentDate: today() });
+      var t = findTimesheet(id);
+      if (!t) return;
+      S.updateTimesheet(id, tsSentPatch(t, null));
       reloadData();
       render();
       showToast('✓ Отмечено: отослано');
@@ -1664,9 +1993,14 @@
   }
 
   function tsMarkSentGroup(month) {
+    if (!tsModulesFresh()) { appAlert(TS_STALE); return; }
     var mates = C.timesheetsOfMonth(timesheets, month);
+    for (var qi = 0; qi < mates.length; qi++) {
+      var prob = tsClaimsProblem(mates[qi]);
+      if (prob) { appAlert(tsClaimsBlockText(qi + 1, prob, true)); return; }
+    }
     appConfirm('Отметить ОБА бланка месяца как отосланные в Матав?', '✓ Отослано', function () {
-      mates.forEach(function (t) { S.updateTimesheet(t.id, { sentMarked: true, sentDate: today() }); });
+      C.timesheetsOfMonth(timesheets, month).forEach(function (t) { S.updateTimesheet(t.id, tsSentPatch(t, null)); });
       reloadData();
       render();
       showToast('✓ Отмечено: отослано');
@@ -1681,14 +2015,45 @@
   // isTest: письмо уходит ТОЛЬКО на «тестового получателя» из настроек, тема с
   // пометкой [ТЕСТ], статус «отослано» НЕ ставится — проверка вложений перед
   // боевым письмом в Матав (ошибки отправки табелей уже случались).
-  function tsClaimsBlockText(n, prob) {
+  function tsClaimsBlockText(n, prob, forMark) {
     return 'Бланк ' + (n ? n + ' ' : '') + '(Claims Conference) подписан не так, как требуется: ' + prob + '. ' +
-      'В Матав не отправляю. Как исправить: обновите приложение (🔄) — на карточке появится кнопка подписи; ' +
+      (forMark ? 'Отметку «Отослано» не ставлю.' : 'В Матав не отправляю.') +
+      ' Как исправить: обновите приложение (🔄) — на карточке появится кнопка подписи; ' +
       'распишитесь заново (Джамшид — за каждый день, Григорий — за каждую неделю) и отправьте. ' +
-      'Если кнопки нет — удалите бланк кнопкой «🗑 Удалить бланк» и загрузите его PDF заново.';
+      'Если кнопки нет — сообщите Льву.';
+  }
+
+  // идёт отправка письма: повторное нажатие (медленная сеть) не шлёт второе письмо
+  // (замок истекает через 2 минуты: зависший запрос не запирает отправку до перезагрузки)
+  var tsSendingUntil = 0;
+  function tsSendBusy() {
+    if (Date.now() >= tsSendingUntil) return false;
+    showToast('Подождите — письмо уже отправляется…');
+    return true;
+  }
+  // имя вложения: по типу бланка (обычный / Claims), чтобы в Матав было видно, где какой
+  // Вложения письма больше ~450 КБ (бланки, собранные до v6.14 без сжатия) — сжать без
+  // потерь перед отправкой (лимит вложений EmailJS на тарифе Personal — 500 КБ). Файлы в
+  // архиве не меняются; отпечаток подписей (sigKey) от сжатия не зависит.
+  function tsShrinkIfBig(uris) {
+    var total = uris.reduce(function (n, u) { return n + String(u).length; }, 0);
+    if (total <= 450 * 1024 || typeof window.MetapelTimesheet.shrink !== 'function') return Promise.resolve(uris);
+    var T = window.MetapelTimesheet;
+    return Promise.all(uris.map(function (u) {
+      return T.shrink(T.u8FromDataUrl(u)).then(function (u8) {
+        var small = T.bytesToDataUrl(u8, 'application/pdf');
+        return small.length < String(u).length ? small : u;
+      }, function () { return u; });
+    }));
+  }
+  function tsAttachName(t, month, i, mates) {
+    var claims = t.claims === true;
+    var twin = mates.filter(function (m) { return (m.claims === true) === claims; }).length > 1;
+    return 'tabel-' + month + (claims ? '-claims' : '') + (twin ? '-' + (i + 1) : '') + '-signed.pdf';
   }
 
   function tsSendGroup(month, isTest) {
+    if (tsSendBusy()) return;
     var mates = C.timesheetsOfMonth(timesheets, month);
     if (mates.length > 2) { appAlert('Поддерживается не больше двух бланков в месяце (в письме два вложения).'); return; }
     if (mates.length < 2) { if (mates.length === 1) tsSend(mates[0].id, isTest); return; }
@@ -1726,7 +2091,10 @@
       : (already ? 'Отправить ОБА бланка ПОВТОРНО' : 'Отправить ОБА подписанных бланка') +
         ' одним письмом в Матав?\n\nКому: ' + toList.join(', ');
     appConfirm(confirmMsg, isTest ? '🧪 Отправить тест' : (already ? '📧 Отослать повторно' : '📧 Отправить'), function () {
+      if (tsSendBusy()) return;
+      tsSendingUntil = Date.now() + 2 * 60000;
       showToast('Готовлю и отправляю…');
+      var sentObjs = [];
       Promise.all(mates.map(function (t, qi) {
         return Promise.all([
           window.MetapelSync.fetchTimesheetFile(settings, t.id, '-signed'),
@@ -1740,11 +2108,12 @@
         // несовпавшие файлы — оба сразу (одна пересборка, а не «пересобрать → отправить» дважды)
         var stale = res.filter(function (x) { return x.stale; }).map(function (x) { return x.t; });
         if (stale.length) { var se = new Error('stale'); se.tsRebuild = stale; throw se; }
+        sentObjs = res.map(function (x) { return x.obj; });
         return res.map(function (x) {
           var dataUri = String(x.obj.pdf);
           return dataUri.indexOf('data:') === 0 ? dataUri : 'data:application/pdf;base64,' + dataUri;
         });
-      }).then(function (uris) {
+      }).then(tsShrinkIfBig).then(function (uris) {
         var monthSlash = tsMonthSlash(month);
         var subject = (isTest ? '[ТЕСТ] ' : '') + 'יומן עבודה חתום — ' + monthSlash;
         var messageHtml =
@@ -1759,26 +2128,28 @@
           return window.emailjs.send(ej.serviceId, ej.templateId, {
             to_email: toStr, recipient: toStr, month: monthSlash,
             subject: subject, message_html: messageHtml,
-            filename: 'tabel-' + month + '-1-signed.pdf', content: uris[0],
-            filename2: 'tabel-' + month + '-2-signed.pdf', content2: uris[1]
+            filename: tsAttachName(mates[0], month, 0, mates), content: uris[0],
+            filename2: tsAttachName(mates[1], month, 1, mates), content2: uris[1]
           }, { publicKey: ej.publicKey });
         });
       }).then(function () {
+        tsSendingUntil = 0;
         if (isTest) {
           // статусы НЕ трогаем: тест — не отправка в Матав
           showToast('✓ Тестовое письмо отправлено — проверьте почту');
           return;
         }
-        mates.forEach(function (t) { S.updateTimesheet(t.id, { sentMarked: true, sentDate: today() }); });
+        mates.forEach(function (t, qi) { S.updateTimesheet(t.id, tsSentPatch(t, sentObjs[qi] && sentObjs[qi].sigKey)); });
         reloadData();
         render();
         showToast('✓ Оба бланка отосланы в Матав');
         runSync();
       }).catch(function (e) {
+        tsSendingUntil = 0;
         if (e && e.tsRebuild) { tsOfferRebuild(e.tsRebuild); return; }
         if (e && e.tsAlert) { appAlert(e.message); return; }
         if (e && e.tsArchive) { appAlert(tsArchiveFailText(e)); return; }
-        appAlert('Не удалось отправить через EmailJS: ' + (e && (e.text || e.message) || e) +
+        appAlert('Письмо не отправлено: ' + errText(e) +
           '\n\nЗапасной путь: скачать оба подписанных PDF, отправить вручную, затем «Отметить Отослано».');
       });
     });
@@ -1802,6 +2173,7 @@
   }
 
   function tsSendEmail(id, isTest) {
+    if (tsSendBusy()) return;
     var t = findTimesheet(id);
     if (!t) return;
     // подписи бланка проверяются по файлу архива — нужен свежий calc.js / sync.js
@@ -1836,7 +2208,10 @@
       : (already ? 'Отправить табель ПОВТОРНО' : 'Отправить подписанный табель') +
         ' письмом в Матав?\n\nКому: ' + toList.join(', ');
     appConfirm(confirmMsg, isTest ? '🧪 Отправить тест' : (already ? '📧 Отослать повторно' : '📧 Отправить'), function () {
+      if (tsSendBusy()) return;
+      tsSendingUntil = Date.now() + 2 * 60000;
       showToast('Готовлю и отправляю…');
+      var sentKey = null;
       var suffix = tsHasSignedFile(t) ? '-signed' : '';
       Promise.all([
         window.MetapelSync.fetchTimesheetFile(settings, id, suffix),
@@ -1845,6 +2220,7 @@
         var obj = r[0], eff = tsSendSigs(t, r[1].data, isTest, 0);
         // файл должен быть собран ровно из подписей бланка (см. timesheetSigKey)
         if (tsStaleSigned(t, eff, obj)) { var stale = new Error('stale'); stale.tsRebuild = [t]; throw stale; }
+        sentKey = obj && obj.sigKey;
         return obj;
       }).catch(tsArchiveStage).then(function (obj) {
         // Динамическое вложение EmailJS («Variable Attachment») ждёт в параметре
@@ -1852,6 +2228,9 @@
         // base64). obj.pdf уже хранится в таком виде, поэтому шлём его как есть.
         var dataUri = String(obj.pdf);
         if (dataUri.indexOf('data:') !== 0) dataUri = 'data:application/pdf;base64,' + dataUri;
+        return tsShrinkIfBig([dataUri]);
+      }).then(function (uris) {
+        var dataUri = uris[0];
         // Тему и тело письма (иврит, RTL) формируем ЗДЕСЬ, в коде, и шлём как
         // переменные. В шаблоне EmailJS остаётся только «{{{subject}}}» и
         // «{{{message_html}}}» (тройные фигурные = БЕЗ html-эскейпа, иначе «/»
@@ -1871,25 +2250,27 @@
           return window.emailjs.send(ej.serviceId, ej.templateId, {
             to_email: toStr, recipient: toStr, month: monthSlash,
             subject: subject, message_html: messageHtml,
-            filename: 'tabel-' + t.month + '-signed.pdf', content: dataUri
+            filename: tsAttachName(t, t.month, 0, [t]), content: dataUri
           }, { publicKey: ej.publicKey });
         });
       }).then(function () {
+        tsSendingUntil = 0;
         if (isTest) {
           // статусы НЕ трогаем: тест — не отправка в Матав
           showToast('✓ Тестовое письмо отправлено — проверьте почту');
           return;
         }
-        S.updateTimesheet(id, { sentMarked: true, sentDate: today() });
+        S.updateTimesheet(id, tsSentPatch(findTimesheet(id) || t, sentKey));
         reloadData();
         render();
         showToast('✓ Отослано в Матав');
         runSync();
       }).catch(function (e) {
+        tsSendingUntil = 0;
         if (e && e.tsRebuild) { tsOfferRebuild(e.tsRebuild); return; }
         if (e && e.tsAlert) { appAlert(e.message); return; }
         if (e && e.tsArchive) { appAlert(tsArchiveFailText(e)); return; }
-        appAlert('Не удалось отправить через EmailJS: ' + (e && (e.text || e.message) || e) +
+        appAlert('Письмо не отправлено: ' + errText(e) +
           '\n\nЗапасной путь: «Скачать подписанный PDF», отправить вручную, затем «Отметить Отослано».');
       });
     });
@@ -2249,6 +2630,13 @@
     return target.type === 'log' ? log[target.id] : findExtra(target.id);
   }
 
+  // как расписываться на этом устройстве: на сенсорном экране — пальцем, иначе мышью
+  // (машина в доме Григория — компьютер с мышью)
+  function signHow() {
+    try { return window.matchMedia('(pointer: coarse)').matches ? 'пальцем' : 'мышью'; }
+    catch (e) { return 'пальцем'; }
+  }
+
   // Открывает окно подписи в режиме «вернуть PNG» (для табелей). onDone(pngDataUrl).
   // Подпись с ПРОЗРАЧНЫМ фоном — чтобы накладывалась поверх бланка.
   function openFingerSign(title, descHtml, okText, hintText, onDone, color) {
@@ -2260,7 +2648,7 @@
     $('#sign-ok').textContent = okText || '✓ Готово';
     $('#sign-later').textContent = 'Позже (расписаться потом)'; // серия окон переименует после вызова
     tsSeriesCount = 0;                                            // …и сама скажет, сколько уже собрано
-    var hint = $('#sign-hint'); if (hint) hint.textContent = hintText || 'Распишитесь пальцем в рамке выше и нажмите кнопку.';
+    var hint = $('#sign-hint'); if (hint) hint.textContent = hintText || 'Распишитесь ' + signHow() + ' в рамке выше и нажмите кнопку.';
     $('#modal-sign').classList.add('open');
     // окно открывается с ВЕРХА: в серии недель прокрутка от прошлого окна иначе
     // спрятала бы заголовок «неделя k из N» с датами (на небольших экранах)
@@ -2332,7 +2720,7 @@
     $('#sign-title').textContent = '✍ Расписка о получении';
     $('#sign-ok').textContent = '✓ ОК — деньги получил';
     $('#sign-later').textContent = 'Позже (расписаться потом)';
-    var h = $('#sign-hint'); if (h) h.textContent = 'Метапель: распишитесь пальцем в рамке выше и нажмите ОК.';
+    var h = $('#sign-hint'); if (h) h.textContent = 'Метапель: распишитесь ' + signHow() + ' в рамке выше и нажмите ОК.';
     var what = 'наличными'; // обычный платёж
     if (r.kind === 'gift') what = 'в подарок';
     if (r.kind === 'advance') what = 'под отчёт';
@@ -2351,7 +2739,9 @@
     // внутреннее разрешение по фактическому размеру на экране
     var rect = canvas.getBoundingClientRect();
     canvas.width = Math.max(300, Math.round(rect.width));
-    canvas.height = 300; // задание width/height очищает холст в прозрачный
+    // высота — как на экране (на невысоком экране холст ниже, см. styles.css): иначе
+    // росчерк растягивался бы по вертикали. Задание width/height очищает холст в прозрачный
+    canvas.height = Math.max(150, Math.round(rect.height) || 300);
     signCtx = canvas.getContext('2d');
     if (!transparent) {
       // расписки — на белом фоне; табели — прозрачный (накладываем на бланк)
@@ -2377,7 +2767,7 @@
 
   function confirmSign() {
     if (!actionGuard()) return;
-    if (!signInk) { appAlert('Сначала распишитесь пальцем в рамке.'); return; }
+    if (!signInk) { appAlert('Сначала распишитесь ' + signHow() + ' в рамке.'); return; }
     // режим табелей: вернуть PNG в колбэк, обычную «расписочную» логику пропускаем
     if (signCallback) {
       // случайное касание (точка) — не подпись: в бланке оно стало бы «подписью» недели
@@ -2462,11 +2852,16 @@
       // на экране остались бы карточки по старым — и заплатить можно по устаревшей
       // цифре (диалог оплаты берёт сумму из отрисованного начисления).
       var blBefore = JSON.stringify(settings.bl || null);
+      // сведение с облаком (sync.js) может поменять данные устройства и без заливки
+      // (заливка не прошла) — тогда данные в памяти приложения надо перечитать, иначе
+      // следующее действие записало бы устаревшую запись поверх сведённой
+      var dataBefore = C.hashString(window.MetapelSync.buildBackupJson(settings, S, 0));
       return window.MetapelSync.processQueue(settings, S, null).then(function (sent) {
         return window.MetapelSync.backupIfChanged(settings, S, C.hashString).then(function (backedUp) {
           syncInFlight = false;
           settings = S.loadSettings(); // backupIfChanged мог принять облачную «сумму от Матав»
-          if (sent > 0 || backedUp || JSON.stringify(settings.bl || null) !== blBefore) {
+          var dataChanged = C.hashString(window.MetapelSync.buildBackupJson(settings, S, 0)) !== dataBefore;
+          if (sent > 0 || backedUp || dataChanged || JSON.stringify(settings.bl || null) !== blBefore) {
             reloadData();
             backgroundRender();
           } else if ((S.getMeta('lastSyncError') || null) !== errBefore) {
@@ -3026,13 +3421,13 @@
             // lastHash && localHash===lastHash для авто-pull, а с null авто-pull НИКОГДА
             // не срабатывал (новые облачные данные, напр. табель, не приезжали). Теперь
             // localHash совпадёт с lastHash → последующие авто-подтягивания работают.
-            S.setMeta('lastBackupHash', C.hashString(window.MetapelSync.buildBackupJson(settings, S, 0)));
+            window.MetapelSync.rememberSynced(settings, S, C.hashString);
             S.setMeta('lastSyncError', null); // снять «облачная копия новее» после успешного восстановления
             reloadData();
             render();
             showToast('✓ Данные восстановлены');
           }).catch(function (e) {
-            appAlert('Не получилось восстановить: ' + (e && e.message || e));
+            appAlert('Не получилось восстановить: ' + errText(e));
           });
         });
       });
@@ -3202,9 +3597,13 @@
     currentSign = null;
     signCallback = null;
     tsPreviewSave = null;
+    tsPreviewSigs = 0;
+    tsSeriesCount = 0; // серия окон подписи закончилась или прервана (следующее окно серии поставит снова)
     matavMonth = null;
     confirmCallback = null;
+    confirmNoCallback = null;
     updateScrollLock();
+    setTimeout(showNextDialog, 650);
     // полсекунды игнорируем касания: «дребезг» пальца после закрытия окна
     // не должен нажать то, что оказалось под ним
     tapShieldUntil = Date.now() + 500;
@@ -3351,7 +3750,26 @@
       closeModals();
       if (cb) cb();
     });
-    $('#ts-preview-cancel').addEventListener('click', function () { tsPreviewSave = null; closeModals(); });
+    $('#ts-preview-cancel').addEventListener('click', function () {
+      // только что поставленные подписи (у Claims — до 21+5) одним касанием не теряем
+      if (tsPreviewSigs > 0) {
+        appConfirm('Не сохранять подписанный бланк? Только что поставленные подписи (' + tsPreviewSigs +
+          ') пропадут — расписываться придётся заново.', 'Да, не сохранять',
+          function () { tsPreviewSave = null; tsClearLive(); closeModals(); }, { noLabel: 'Нет, вернуться к бланку' });
+        return;
+      }
+      tsPreviewSave = null;
+      closeModals();
+    });
+    // закрытие/обновление вкладки посреди подписания (серия окон, предпросмотр,
+    // сохранение, ответ «Повторить сохранение?») или отправки — браузер переспросит
+    window.addEventListener('beforeunload', function (e) {
+      if (tsSeriesCount > 0 || tsPreviewSave || tsBusy() || tsLivePending() || Date.now() < tsSendingUntil || Date.now() < tsUploadingUntil) {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
+    });
 
     // окно подтверждения
     $('#confirm-yes').addEventListener('click', function () {
@@ -3362,8 +3780,10 @@
       if (cb) cb();
     });
     $('#confirm-no').addEventListener('click', function () {
+      var nb = confirmNoCallback;
       closeConfirm();
       tapShieldUntil = Date.now() + 500;
+      if (nb) nb();
     });
 
     // детали оплаты (сумма/дата) — по явному запросу
@@ -3417,7 +3837,7 @@
     $('#hours-input').addEventListener('input', updateHoursEffect);
     $('#hours-save').addEventListener('click', saveMatavMonth);
 
-    // загрузка табеля Битуах Леуми (PDF) — метаданные локально, файл в архив
+    // загрузка табеля Битуах Леуми (PDF) — см. tsUploadFile
     $('#ts-file-input').addEventListener('change', function (e) {
       var file = e.target.files && e.target.files[0];
       e.target.value = ''; // позволить повторный выбор того же файла
@@ -3426,72 +3846,10 @@
       // его негде сохранить — иначе карточка появится, а подпись потом упадёт
       // «файл не найден в архиве». Поэтому требуем настроенный архив сразу.
       if (!window.MetapelSync.isOn(settings)) {
-        appAlert('Архив не настроен (нет токена). Введите токен GitHub в настройках, затем загрузите табель — без архива PDF негде хранить.');
+        appAlert('Архив не настроен (нет токена) — бланк негде хранить. Сообщите Льву.');
         return;
       }
-      var reader = new FileReader();
-      reader.onload = function () {
-        var dataUrl = reader.result;
-        // месяц табеля берём ИЗ БЛАНКА (период «לתקופה MM/YYYY»), а не из даты
-        // загрузки: табель сдают за прошлый месяц. Если не распознали — текущий.
-        var fallbackMonth = C.parseISO(today()).getFullYear() + '-' +
-          ('0' + (C.parseISO(today()).getMonth() + 1)).slice(-2);
-        showToast('Читаю период бланка…');
-        var pdfU8 = window.MetapelTimesheet.u8FromDataUrl(dataUrl);
-        Promise.all([
-          window.MetapelTimesheet.parseMonth(pdfU8).catch(function () { return null; }),
-          // бланк Claims Conference помечаем сразу — на карточке видно ДО подписания
-          window.MetapelTimesheet.parse(pdfU8).then(function (p) { return p.claims; }).catch(function () { return null; })
-        ]).then(function (res) {
-            var parsedMonth = res[0], claims = res[1];
-            var month = parsedMonth || fallbackMonth;
-            var id = 'ts-' + Date.now();
-            var rec = { id: id, month: month, fileName: file.name, uploadedDate: today(),
-              caregiverSigned: false, caregiverSignedDate: null, familySigned: false,
-              familySignedDate: null, sentMarked: false, sentDate: null };
-            if (typeof claims === 'boolean') rec.claims = claims;
-            S.addTimesheet(rec);
-            reloadData();
-            render();
-            showToast('Загружаю табель в архив…');
-            window.MetapelSync.putTimesheetFile(settings, id, '', {
-              pdf: dataUrl, fileName: file.name, month: month
-            }).then(function () {
-              // «✓» — только когда карточка реально ушла в облако: раньше тост
-              // появлялся ДО синхронизации метаданных, приложение закрывали — и
-              // на других устройствах табеля не было (PDF в архиве, бэкап без записи)
-              showToast('PDF в архиве, отправляю карточку в облако…');
-              return runSync().then(function () {
-                // «Синхронизировано» = локальный хэш совпал с залитым (lastBackupHash) —
-                // глобальный lastSyncError тут не годится: его могла поставить чужая
-                // застрявшая расписка ПОСЛЕ успешного пуша карточки (ложная тревога)
-                var clean = false;
-                try {
-                  clean = C.hashString(window.MetapelSync.buildBackupJson(settings, S, 0)) ===
-                    S.getMeta('lastBackupHash');
-                } catch (e) {}
-                if (clean) {
-                  showToast('✓ Табель загружен и синхронизирован (' + month + ')');
-                } else {
-                  var err = S.getMeta('lastSyncError');
-                  appAlert('PDF табеля в архиве, но карточка ещё НЕ в облаке' +
-                    (err ? ' (' + err + ')' : '') +
-                    '.\nОставьте приложение открытым — оно дошлёт само (авто-синхронизация раз в 15 минут). Повторно загружать не нужно.');
-                }
-              });
-            }, function (err) {
-              // PDF не попал в архив — убираем «битую» карточку, чтобы подпись потом
-              // не падала. Обработчик ВТОРЫМ аргументом then: откат карточки только
-              // при провале putTimesheetFile, а не из-за ошибки последующего sync.
-              S.deleteTimesheet(id);
-              reloadData();
-              render();
-              appAlert('Не удалось сохранить PDF табеля в архив: ' + (err && err.message || err) +
-                '\nКарточка удалена. Проверьте интернет/токен и загрузите снова.');
-            });
-          });
-      };
-      reader.readAsDataURL(file);
+      tsUploadFile(file);
     });
 
     $('#pay-confirm').addEventListener('click', confirmPay);

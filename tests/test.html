@@ -498,7 +498,7 @@
     eq('computeSlots: у места метапелет — число месяца (для окна «день k из N»)',
       kinds(claimsR, 'care-day').map(function (s) { return s.day; }), [1, 2, 3, 6, 7]);
     eq('computeSlots: в бланке Claims недельных мест столько же', kinds(claimsR, 'family-week').length, 2);
-    eq('модуль подписи: уровень API 2 (app.js отказывается работать со старой копией)', TSG.apiLevel, 2);
+    eq('модуль подписи: уровень API 3 (app.js отказывается работать со старой копией)', TSG.apiLevel, 3);
     eq('computeSlots: недели пронумерованы по порядку',
       kinds(claimsR, 'family-week').map(function (s) { return s.week; }), [1, 2]);
     eq('computeSlots: у недели — её рабочие дни (для окна «неделя k из N»)',
@@ -653,6 +653,181 @@
       for (var i = 0; i < 9; i++) e = C.timesheetSigsWith(e, 'care', { sig: 'data:image/png;base64,Q' + i }, true);
       return e.prev.length;
     })(), 4);
+
+    // ---------- v6.14: распознавание Claims, статус, понятные ошибки ----------
+    eq('computeSlots: адресат «אל הקרן לנפגעי השואה» (с артиклем) — тоже Claims',
+      TSG.computeSlots(tsItems('אל הקרן לנפגעי השואה'), { claimsCare: true }).claims, true);
+    eq('статус: «отослано» у Claims без подписей метапелет по дням — НЕ «отослано» (видно, что нужна подпись)',
+      C.timesheetStatus({ claims: true, caregiverSigned: true, familySigned: true, familySigsN: 5, sentMarked: true }), 'family');
+    eq('статус: полностью подписанный и отосланный — «отослано»',
+      C.timesheetStatus({ claims: true, caregiverSigned: true, caregiverSigsN: 21, familySigned: true, familySigsN: 5, sentMarked: true }), 'sent');
+    eq('статус: обычный бланк, обе подписи и отметка — «отослано»',
+      C.timesheetStatus({ caregiverSigned: true, caregiverSig: 'in-sigs-file', familySigned: true, familySig: 'in-sigs-file', sentMarked: true }), 'sent');
+    eq('ошибка сети — простыми словами', /нет связи с интернетом/.test(C.errorText(new TypeError('Failed to fetch'))), true);
+    eq('ошибка токена GitHub — «сообщите Льву»', /токен.*сообщите Льву/.test(C.errorText(new Error('GitHub 401: {"message":"Bad credentials"}'))), true);
+    eq('EmailJS: письмо слишком большое', /слишком большое/.test(C.errorText({ status: 413, text: 'Payload Too Large' })), true);
+    eq('EmailJS: Invalid grant — переподключить Gmail', /Gmail/.test(C.errorText({ status: 412, text: 'Gmail_API: Invalid grant' })), true);
+    eq('обычный текст ошибки — как есть', C.errorText(new Error('бланк удалён')), 'бланк удалён');
+
+    // ---------- v6.14: сведение записей табелей с облаком (timesheetsMerge) ----------
+    function marks(n) { var a = []; for (var i = 1; i <= n; i++) a.push('in-sigs-file#' + i); return a; }
+    // сентябрьский Claims: здесь — подписан старой версией (метапелет только флаг) и
+    // отослан 28.09; в облаке — Джамшид расписался по дням (запись с другого устройства)
+    var kL = { id: 'k', month: '2026-09', claims: true, caregiverSigned: true, caregiverSignedDate: '2026-09-28',
+      familySigned: true, familySignedDate: '2026-09-28', familySig: 'in-sigs-file', familySigs: marks(5), familySigsN: 5,
+      sigKey: 'KF', sigsArchived: true, sentMarked: true, sentDate: '2026-09-28' };
+    var kC = JSON.parse(JSON.stringify(kL));
+    kC.caregiverSig = 'in-sigs-file'; kC.caregiverSigs = marks(21); kC.caregiverSigsN = 21; kC.caregiverSignedDate = '2026-10-06';
+    kC.sigKey = 'KCF'; kC.sentMarked = false; kC.sentDate = null;
+    var m1 = C.timesheetsMerge([kL], [kC], []).list[0];
+    eq('сведение: подписи метапелет по дням с другого устройства не затираются отставшим',
+      [m1.caregiverSigsN, m1.caregiverSigs.length, m1.sigKey], [21, 21, 'KCF']);
+    eq('сведение: старое «отослано» (другая версия подписей) снимается — новую версию надо отослать',
+      [m1.sentMarked, m1.sentDate], [false, null]);
+    var kL2 = JSON.parse(JSON.stringify(kL)); kL2.sentDate = '2026-10-07'; kL2.sentKey = 'KCF';
+    var m2 = C.timesheetsMerge([kL2], [kC], []).list[0];
+    eq('сведение: здесь отослали ИМЕННО новую версию (отпечаток совпал) — «отослано» остаётся',
+      [m2.sentMarked, m2.sentDate, m2.sentKey, m2.caregiverSigsN], [true, '2026-10-07', 'KCF', 21]);
+    var rL = { id: 'r', month: '2026-08', caregiverSigned: true, caregiverSig: 'in-sigs-file', familySigned: true,
+      familySig: 'in-sigs-file', sigKey: 'R1', sentMarked: false, sentDate: null };
+    var rCs = JSON.parse(JSON.stringify(rL)); rCs.sentMarked = true; rCs.sentDate = '2026-10-05'; rCs.sentKey = 'R1';
+    var m3 = C.timesheetsMerge([rL], [rCs], []);
+    eq('сведение: «отослано» с другого устройства (та же версия) не откатывается',
+      [m3.list[0].sentMarked, m3.list[0].sentDate, m3.changed], [true, '2026-10-05', true]);
+    var rC2 = JSON.parse(JSON.stringify(rCs)); delete rC2.sentKey;
+    eq('сведение: старая отметка «отослано» без отпечатка — по совпадению подписей',
+      C.timesheetsMerge([rL], [rC2], []).list[0].sentMarked, true);
+    var rL3 = JSON.parse(JSON.stringify(rL)); rL3.sigKey = 'R2';
+    eq('сведение: здесь переподписали (другие подписи) — чужое «отослано» прежней версии не берём',
+      C.timesheetsMerge([rL3], [rC2], []).list[0].sentMarked, false);
+    var onlyCare = { id: 'p', month: '2026-11', caregiverSigned: true, caregiverSig: 'in-sigs-file', familySigned: false, sigKey: 'P1' };
+    var onlyFam = { id: 'p', month: '2026-11', caregiverSigned: false, familySigned: true, familySig: 'in-sigs-file', familySignedDate: '2026-11-30', sigKey: 'P2' };
+    var m4 = C.timesheetsMerge([onlyCare], [onlyFam], []).list[0];
+    eq('сведение: подписи двух ролей с двух устройств — обе на месте', [m4.caregiverSigned, m4.familySigned, m4.familySig], [true, true, 'in-sigs-file']);
+    var m5 = C.timesheetsMerge([rL], [rL, { id: 'new', month: '2026-12' }, { id: 'del', month: '2026-12' }], ['del']).list.map(function (t) { return t.id; });
+    eq('сведение: бланк, загруженный на другом устройстве, добавляется; удалённый здесь — не возвращается', m5, ['r', 'new']);
+    eq('сведение: одинаковые записи — изменений нет', C.timesheetsMerge([rL, kL], [rL, kL], []).changed, false);
+    eq('сведение: запись, которая есть только здесь, остаётся', C.timesheetsMerge([rL, kL], [rL], []).list.length, 2);
+    var cl = { id: 'q', month: '2026-12' }, cc = { id: 'q', month: '2026-12', claims: true };
+    eq('сведение: Claims, распознанный на другом устройстве, — Claims и здесь', C.timesheetsMerge([cl], [cc], []).list[0].claims, true);
+
+    // ---------- v6.14: трёхстороннее слияние при заливке поверх более нового облака ----------
+    function fstore(d, meta) {
+      d = JSON.parse(JSON.stringify(d)); meta = JSON.parse(JSON.stringify(meta || {}));
+      if (meta.lastBackupHash === undefined) meta.lastBackupHash = 'H0';
+      function cp(x) { return JSON.parse(JSON.stringify(x)); }
+      return {
+        loadLog: function () { return cp(d.log || {}); }, loadExtras: function () { return cp(d.extras || []); },
+        loadReturns: function () { return cp(d.returns || []); }, loadTimesheets: function () { return cp(d.timesheets || []); },
+        replaceMoney: function (l, e, r) { d.log = cp(l); d.extras = cp(e); d.returns = cp(r); },
+        replaceTimesheets: function (t) { d.timesheets = cp(t); },
+        saveSettings: function () {}, getMeta: function (k) { return meta[k]; }, setMeta: function (k, v) { meta[k] = v; }, d: d
+      };
+    }
+    function stSettings(recipient) {
+      var st = defaults(); st.sync = { enabled: true, repo: 'u/r', token: 'TOKEN' };
+      st.emailjs = { serviceId: 's', templateId: 't', publicKey: 'k', recipient: recipient };
+      return st;
+    }
+    var pay = function (amt) { return { paidAmount: amt, paidDate: '2026-10-01', method: 'cash' }; };
+    var base0 = { log: { 'a': pay(100) }, extras: [], returns: [], timesheets: [rL] };
+    function baseOf(st, d) { var b = Sync.partHashes({ settings: st, log: d.log, extras: d.extras, returns: d.returns, timesheets: d.timesheets }, C.hashString); b.h = 'H0'; return b; }
+    function cloudOf(st, d, gen) { var c = JSON.parse(JSON.stringify(d)); c.settings = JSON.parse(JSON.stringify(st)); c.settings.sync.token = ''; c.generation = gen; c.kind = 'metapel-backup'; return c; }
+    // (а) здесь деньги не менялись, на другом устройстве отметили оплату — берём облачные
+    var sA = stSettings('ronik@matav.org.il');
+    var locA = JSON.parse(JSON.stringify(base0)); locA.timesheets = [kL];
+    var stA = fstore(locA, { syncBase: baseOf(sA, base0) });
+    var clA = JSON.parse(JSON.stringify(base0)); clA.log.b = pay(200);
+    var resA = Sync.mergeFromCloud(sA, stA, cloudOf(sA, clA, 9), C.hashString);
+    eq('3-сторон.: оплата с другого устройства принята, деньги можно заливать',
+      [resA.moneyOk, Object.keys(stA.d.log).sort()], [true, ['a', 'b']]);
+    // (б) деньги менялись только здесь — свои
+    var locB = JSON.parse(JSON.stringify(base0)); locB.log.c = pay(300);
+    var stB = fstore(locB, { syncBase: baseOf(sA, base0) });
+    var resB = Sync.mergeFromCloud(sA, stB, cloudOf(sA, base0, 9), C.hashString);
+    eq('3-сторон.: деньги менялись только здесь — свои, без конфликта', [resB.moneyOk, Object.keys(stB.d.log).sort()], [true, ['a', 'c']]);
+    // (в) деньги менялись и там, и тут — по-старому (строгое правило → конфликт)
+    var stC = fstore(locB, { syncBase: baseOf(sA, base0) });
+    var resC = Sync.mergeFromCloud(sA, stC, cloudOf(sA, clA, 9), C.hashString);
+    eq('3-сторон.: деньги правили и там, и тут — решает строгое правило (здесь — конфликт)',
+      [resC.moneyOk, Object.keys(stC.d.log).sort()], [false, ['a', 'c']]);
+    // (г) без точки синхронизации — деньги по-старому, табели всё равно сводятся
+    var stD = fstore({ log: base0.log, extras: [], returns: [], timesheets: [kL] }, {});
+    var resD = Sync.mergeFromCloud(sA, stD, cloudOf(sA, { log: base0.log, extras: [], returns: [], timesheets: [kC] }, 9), C.hashString);
+    eq('3-сторон.: без точки синхронизации деньги — по-старому, подписи по дням всё равно не теряются',
+      [resD.moneyOk, stD.d.timesheets[0].caregiverSigsN], [false, 21]);
+    // (д) настройки здесь не менялись — облачные (адрес Матав не откатывается), токен свой
+    var sE = stSettings('marinach@matav.org.il');
+    var stE = fstore(locA, { syncBase: baseOf(sE, base0) });
+    Sync.mergeFromCloud(sE, stE, cloudOf(stSettings('ronik@matav.org.il'), base0, 9), C.hashString);
+    eq('3-сторон.: адрес Матав, исправленный на другом устройстве, отставшее не откатывает; токен — свой',
+      [sE.emailjs.recipient, sE.sync.token], ['ronik@matav.org.il', 'TOKEN']);
+    // (е) настройки менялись здесь — свои
+    var sF = stSettings('local@x.org');
+    var stF = fstore(locA, { syncBase: baseOf(stSettings('old@x.org'), base0) });
+    Sync.mergeFromCloud(sF, stF, cloudOf(stSettings('cloud@x.org'), base0, 9), C.hashString);
+    eq('3-сторон.: настройки, изменённые здесь, не заменяются облачными', sF.emailjs.recipient, 'local@x.org');
+    // (ж) табели здесь не менялись — облачные целиком
+    var stG = fstore(base0, { syncBase: baseOf(sA, base0) });
+    var clG = JSON.parse(JSON.stringify(base0)); clG.timesheets = [rCs, kC];
+    Sync.mergeFromCloud(sA, stG, cloudOf(sA, clG, 9), C.hashString);
+    eq('3-сторон.: табели здесь не менялись — облачные целиком', stG.d.timesheets.map(function (t) { return t.id + ':' + !!t.sentMarked; }), ['r:true', 'k:false']);
+    // точка синхронизации, чей хэш поменяла старая версия, недействительна — по-старому
+    var stInv = fstore(locA, { syncBase: baseOf(sA, base0), lastBackupHash: 'H-старой-версии' });
+    var resInv = Sync.mergeFromCloud(sA, stInv, cloudOf(sA, clA, 9), C.hashString);
+    eq('3-сторон.: точка устарела (хэш поменяла старая версия) — деньги по-старому, без «перемотки»',
+      [resInv.moneyOk, Object.keys(stInv.d.log).sort()], [false, ['a']]);
+    // принятая часть становится новой точкой: при сбое заливки следующая чужая правка — не конфликт
+    var cA2 = cloudOf(sA, clA, 9);
+    eq('3-сторон.: после «перемотки» денег точка сдвинулась на облачные',
+      stA.getMeta('syncBase').m === Sync.partHashes(cA2, C.hashString).m && stA.getMeta('syncBase').h === 'H0', true);
+    var clA3 = JSON.parse(JSON.stringify(clA)); clA3.log.d = pay(400);
+    var resA3 = Sync.mergeFromCloud(sA, stA, cloudOf(sA, clA3, 10), C.hashString);
+    eq('3-сторон.: заливка не удалась, Лев отметил ещё оплату — снова принимается, без конфликта',
+      [resA3.moneyOk, Object.keys(stA.d.log).sort()], [true, ['a', 'b', 'd']]);
+    // исправленная здесь сумма от Матав не откатывается старой облачной (облако настройки не меняло)
+    var sM = stSettings('ronik@matav.org.il'); sM.bl = sM.bl || {}; sM.bl.matavByMonth = { '2026-06': 5820 };
+    var stM = fstore(locA, { syncBase: baseOf(JSON.parse(JSON.stringify(sM)), base0) });
+    var cloudM = cloudOf(JSON.parse(JSON.stringify(sM)), base0, 9);
+    sM.bl.matavByMonth = { '2026-06': 5900 };
+    Sync.mergeFromCloud(sM, stM, cloudM, C.hashString);
+    eq('3-сторон.: исправленная здесь сумма от Матав (5820 → 5900) не откатывается облачной', sM.bl.matavByMonth['2026-06'], 5900);
+    // бланк, заменённый на другом устройстве, не возвращается отставшим (здесь он не менялся)
+    var oldR = { id: 'old', month: '2026-09', fileName: 'old.pdf' }, newR = { id: 'new', month: '2026-09', fileName: 'new.pdf' };
+    var baseT = { log: base0.log, extras: [], returns: [], timesheets: [rL, oldR] };
+    var stT = fstore({ log: base0.log, extras: [], returns: [], timesheets: [rL3, oldR] }, { syncBase: baseOf(sA, baseT) });
+    Sync.mergeFromCloud(sA, stT, cloudOf(sA, { log: base0.log, extras: [], returns: [], timesheets: [rL, newR] }, 9), C.hashString);
+    eq('3-сторон.: бланк, заменённый на другом устройстве, отставшее не возвращает; свой изменённый — остаётся',
+      stT.d.timesheets.map(function (t) { return t.id; }).sort(), ['new', 'r']);
+    // «отослано» по датам: облачная отметка 28.09, подпись по дням 06.10 — не версия, ушедшая в Матав
+    var kStale = JSON.parse(JSON.stringify(kC)); kStale.sigKey = 'KF';  // отпечаток записи устарел
+    var kSent = JSON.parse(JSON.stringify(kL)); kSent.sigKey = 'KF';
+    eq('«отослано» по датам: отметка 28.09 не переносится на подписи 06.10 при устаревшем отпечатке',
+      C.timesheetsMerge([kStale], [kSent], []).list[0].sentMarked, false);
+    var kLate = JSON.parse(JSON.stringify(kC)); kLate.sentMarked = true; kLate.sentDate = '2026-10-07'; kLate.sentKey = 'другой';
+    eq('«отослано» по датам: отослано 07.10, после всех подписей — действует и при несовпавшем отпечатке',
+      C.timesheetsMerge([kLate], [kC], []).list[0].sentMarked, true);
+    var kSame = JSON.parse(JSON.stringify(kC)); kSame.sentMarked = true; kSame.sentDate = '2026-10-06'; kSame.sentKey = 'другой';
+    eq('«отослано» по датам: в один день с подписью и с другим отпечатком — не доверяем (лучше отослать ещё раз)',
+      C.timesheetsMerge([kSame], [kC], []).list[0].sentMarked, false);
+    // запись здесь не менялась с точки синхронизации — облачная версия (облегчённая, отосланная) берётся целиком
+    var hashR = function (r) { return 'H:' + JSON.stringify(r); };
+    var legacyRec = { id: 'g', month: '2026-08', caregiverSigned: true, caregiverSig: 'data:image/png;base64,AAA', familySigned: true, familySig: 'data:image/png;base64,BBB', sentMarked: true, sentDate: '2026-08-28' };
+    var lightRec = { id: 'g', month: '2026-08', caregiverSigned: true, caregiverSig: 'in-sigs-file', familySigned: true, familySig: 'in-sigs-file', sigKey: 'GK', sigsArchived: true, sentMarked: true, sentDate: '2026-08-28' };
+    var baseMap = { g: hashR(legacyRec) };
+    eq('сведение: запись, не менявшаяся здесь, — облачная целиком (картинки не возвращаются в облегчённую запись)',
+      C.timesheetsMerge([legacyRec], [lightRec], [], baseMap, hashR).list[0], lightRec);
+    var legacyEdited = JSON.parse(JSON.stringify(legacyRec)); legacyEdited.claims = false;
+    eq('сведение: запись, изменённая здесь, — по полям (своё не теряется)',
+      C.timesheetsMerge([legacyEdited], [lightRec], [], baseMap, hashR).list[0].caregiverSig, 'data:image/png;base64,AAA');
+    eq('ошибка pdf.js «Invalid PDF structure» — простыми словами', /не открывается как PDF/.test(C.errorText(new Error('Invalid PDF structure.'))), true);
+    eq('3-сторон.: хэши частей не зависят от порядка ключей',
+      Sync.partHashes({ settings: { b: 1, a: 2 }, log: { x: { q: 1, p: 2 } } }, C.hashString).m ===
+      Sync.partHashes({ log: { x: { p: 2, q: 1 } }, settings: { a: 2, b: 1 } }, C.hashString).m, true);
+    eq('localSupersedesCloud: табель, удалённый здесь, не считается потерянным',
+      Sync.localSupersedesCloud({ log: {}, extras: [], returns: [], timesheets: [{ id: 'x' }] }, {}, [], [], [], ['x']), true);
+    eq('localSupersedesCloud: облачный табель, которого здесь нет и не удаляли, — конфликт',
+      Sync.localSupersedesCloud({ log: {}, extras: [], returns: [], timesheets: [{ id: 'x' }] }, {}, [], [], [], []), false);
 
     // ---------- вывод ----------
     var table = document.getElementById('results');

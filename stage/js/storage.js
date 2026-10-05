@@ -73,11 +73,16 @@ window.MetapelStore = (function () {
       mergeDeep(window.MetapelCalc.defaultSettings(), loadRaw().settings || {}));
   }
 
+  // счётчик сохранений настроек за сеанс страницы: синхронизация, во время которой
+  // настройки сохранили (новым объектом), не зальёт устаревшие из памяти (sync.js)
+  var settingsRevision = 0;
   function saveSettings(settings) {
     var raw = loadRaw();
     raw.settings = settings;
     saveRaw(raw);
+    settingsRevision++;
   }
+  function settingsRev() { return settingsRevision; }
 
   function resetSettings() {
     var raw = loadRaw();
@@ -184,6 +189,34 @@ window.MetapelStore = (function () {
     var raw = loadRaw();
     raw.timesheets = (raw.timesheets || []).filter(function (t) { return t.id !== id; });
     raw.syncQueue = (raw.syncQueue || []).filter(function (q) { return q.id !== id; });
+    // «удалено здесь»: сведение с облаком (sync.js) не вернёт эту запись обратно,
+    // пока удаление не уехало в облако (id табеля уникален — хранить можно долго)
+    raw.meta = raw.meta || {};
+    var gone = (raw.meta.tsGone || []).filter(function (x) { return x !== id; });
+    gone.push(id);
+    raw.meta.tsGone = gone.slice(-50);
+    saveRaw(raw);
+  }
+
+  // заменить только записи табелей (сведение с облаком — sync.js)
+  function replaceTimesheets(list) {
+    var raw = loadRaw();
+    raw.timesheets = list || [];
+    saveRaw(raw);
+  }
+
+  // заменить только деньги (log/extras/returns) облачными — когда здесь их не
+  // меняли с последней синхронизации (sync.js). Очередь отправки расписок — как при
+  // восстановлении (replaceData): чистим. Её элементы — снимки записей на момент
+  // подписи; запись могли отменить и провести заново на другом устройстве, и старая
+  // расписка ушла бы в архив поверх новой. Неотправленные подписи из новых данных
+  // следующий прогон синхронизации поставит в очередь заново (app.js runSync).
+  function replaceMoney(log, extras, returns) {
+    var raw = loadRaw();
+    raw.log = log || {};
+    raw.extras = extras || [];
+    raw.returns = returns || [];
+    raw.syncQueue = [];
     saveRaw(raw);
   }
 
@@ -242,6 +275,7 @@ window.MetapelStore = (function () {
   return {
     loadSettings: loadSettings,
     saveSettings: saveSettings,
+    settingsRev: settingsRev,
     resetSettings: resetSettings,
     setOnSaveError: setOnSaveError,
     replaceData: replaceData,
@@ -259,6 +293,8 @@ window.MetapelStore = (function () {
     addTimesheet: addTimesheet,
     updateTimesheet: updateTimesheet,
     deleteTimesheet: deleteTimesheet,
+    replaceTimesheets: replaceTimesheets,
+    replaceMoney: replaceMoney,
     loadSyncQueue: loadSyncQueue,
     pushSync: pushSync,
     removeSync: removeSync,

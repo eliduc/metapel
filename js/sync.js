@@ -173,6 +173,126 @@ window.MetapelSync = (function () {
     return JSON.stringify(buildBackupObject(settings, store, generation), null, 2);
   }
 
+  // ---------- «точка синхронизации» по частям ----------
+  //
+  // Кроме хэша всего залитого/подтянутого состояния (lastBackupHash) помним хэши его
+  // ЧАСТЕЙ — деньги, общие настройки, табели (meta.syncBase). Когда облако ушло
+  // вперёд, а здесь тоже есть правки, по частям видно, что менялось здесь, а что —
+  // на другом устройстве: часть, которую здесь не трогали, берётся из облака
+  // (трёхстороннее слияние, см. mergeFromCloud). Ключи сортируются, чтобы одинаковые
+  // данные с разных устройств давали одинаковый хэш.
+  function stableStringify(v) {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v === undefined ? null : v);
+    if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+    return '{' + Object.keys(v).sort().filter(function (k) { return v[k] !== undefined; })
+      .map(function (k) { return JSON.stringify(k) + ':' + stableStringify(v[k]); }).join(',') + '}';
+  }
+  function sharedSettingsPart(s) {
+    var o = JSON.parse(JSON.stringify(s || {}));
+    for (var i = 0; i < DEVICE_LOCAL_SETTINGS.length; i++) delete o[DEVICE_LOCAL_SETTINGS[i]];
+    return o;
+  }
+  // отпечаток одной записи табеля (для «удалена ли запись на другом устройстве»)
+  function recordHash(rec, hashFn) { return hashFn(stableStringify(rec)); }
+  // obj — объект бэкапа (buildBackupObject или облачный backup/data.json)
+  function partHashes(obj, hashFn) {
+    var tr = {};
+    (obj.timesheets || []).forEach(function (t) { if (t && t.id) tr[t.id] = recordHash(t, hashFn); });
+    return {
+      m: hashFn(stableStringify([obj.log || {}, obj.extras || [], obj.returns || []])),
+      s: hashFn(stableStringify(sharedSettingsPart(obj.settings))),
+      t: hashFn(stableStringify(obj.timesheets || [])),
+      tr: tr
+    };
+  }
+  // запомнить: состояние obj0 (generation 0) теперь совпадает с облаком. h — тот же
+  // хэш, что lastBackupHash: точка по частям действительна, только пока они совпадают
+  // (если хэш поменяла старая версия приложения, части устарели — не верим им)
+  function setSyncedState(store, obj0, hashFn) {
+    var h = hashFn(JSON.stringify(obj0, null, 2));
+    var base = partHashes(obj0, hashFn);
+    base.h = h;
+    store.setMeta('lastBackupHash', h);
+    store.setMeta('syncBase', base);
+  }
+  // то же по текущим данным устройства («Восстановить» в app.js)
+  function rememberSynced(settings, store, hashFn) {
+    setSyncedState(store, buildBackupObject(settings, store, 0), hashFn);
+  }
+  function validBase(store) {
+    var b = store.getMeta('syncBase');
+    return b && b.h && b.h === store.getMeta('lastBackupHash') ? b : null;
+  }
+
+  // Облако новее, а здесь есть несинхронные правки: сводим ДО заливки (результат
+  // сохраняется на устройстве — залитое и локальное совпадут).
+  //  - деньги: здесь не менялись с прошлой синхронизации → облачные; менялись только
+  //    здесь (облачные = точке синхронизации) → свои; менялись и там, и тут →
+  //    прежнее строгое правило (localSupersedesCloud), иначе конфликт;
+  //  - общие настройки: здесь не менялись → облачные (свои device-local поля
+  //    остаются): отставшее устройство больше не откатывает, например, адрес Матав,
+  //    исправленный на другом; менялись только здесь → свои (облачная старая сумма
+  //    от Матав не откатывает исправленную); и там, и тут — как раньше (суммы от
+  //    Матав из облака);
+  //  - табели: здесь не менялись → облачные целиком; иначе — сведение по записям
+  //    (calc.js timesheetsMerge; удалённые здесь не возвращаются, удалённые на другом
+  //    устройстве и не менявшиеся здесь — тоже).
+  // Принятая из облака часть сразу становится новой точкой синхронизации ЭТОЙ части:
+  // если заливка потом не удастся (сеть, CAS), принятое не сочтётся «правкой здесь»
+  // (иначе следующая чужая правка давала бы вечный конфликт, а настройки — откат).
+  // Без действительной точки синхронизации (ещё не синхронизировалось в v6.14 или
+  // хэш поменяла старая версия) — деньги и настройки по-старому, табели — сведением.
+  // → { moneyOk } — можно ли заливать деньги без проверки localSupersedesCloud.
+  function mergeFromCloud(settings, store, cloud, hashFn) {
+    if (!cloud || cloud.kind !== 'metapel-backup') return { moneyOk: false }; // чужое/битое — не сводим
+    var base = validBase(store);
+    var mine = partHashes(buildBackupObject(settings, store, 0), hashFn);
+    var theirs = partHashes(cloud, hashFn);
+    var moneyOk = false;
+    // записалось ли на устройство то, что взяли из облака (переполненная память браузера
+    // молча не даёт записать — тогда заливать нельзя: ушли бы старые деньги этого устройства)
+    function stored() { return partHashes(buildBackupObject(settings, store, 0), hashFn); }
+    if (base && mine.m === base.m) {
+      if (theirs.m !== mine.m) {
+        store.replaceMoney(cloud.log || {}, cloud.extras || [], cloud.returns || []);
+        if (stored().m !== theirs.m) return { moneyOk: false, failed: true };
+      }
+      base.m = theirs.m;
+      moneyOk = true;
+    } else if (base && theirs.m === base.m) {
+      moneyOk = true;
+    }
+    if (base && mine.s === base.s) {
+      if (theirs.s !== mine.s) {
+        var next = mergeSettingsFromCloud(settings, cloud.settings);
+        if (next) replaceSettingsInPlace(settings, next, store);
+      }
+      base.s = theirs.s;
+    } else if (!(base && theirs.s === base.s)) {
+      // как раньше: ОБЩИЙ параметр «суммы от Матав» — облачные суммы принимаются
+      // (помесячные — объединением), иначе устаревшие откатили бы их у всех
+      applySharedSettings(settings, store, sharedSettingsFromCloud(cloud.settings, true));
+    }
+    var C = window.MetapelCalc;
+    if (base && mine.t === base.t) {
+      if (theirs.t !== mine.t) {
+        store.replaceTimesheets(JSON.parse(JSON.stringify(cloud.timesheets || [])));
+        if (stored().t !== theirs.t) return { moneyOk: false, failed: true };
+      }
+      base.t = theirs.t; base.tr = theirs.tr;
+    } else if (C && typeof C.timesheetsMerge === 'function') {
+      var merged = C.timesheetsMerge(store.loadTimesheets(), cloud.timesheets || [], store.getMeta('tsGone') || [],
+        base ? base.tr : null, function (r) { return recordHash(r, hashFn); });
+      if (merged.changed) {
+        store.replaceTimesheets(merged.list);
+        if (stored().t !== hashFn(stableStringify(merged.list))) return { moneyOk: false, failed: true };
+      }
+      if (base) { base.t = theirs.t; base.tr = theirs.tr; }
+    }
+    if (base) store.setMeta('syncBase', base);
+    return { moneyOk: moneyOk };
+  }
+
   // мягкое чтение облачной копии. Возвращает { data, sha }:
   // data=null если копии ещё нет (404); sha нужен для compare-and-swap при записи.
   // МИМО кэша браузера: ответ GitHub API разрешено кэшировать до 60 с, а решения
@@ -210,7 +330,11 @@ window.MetapelSync = (function () {
   // залило копию, но не успело записать у себя новый номер (закрыли приложение),
   // и потом отказывалось дозаливать уже полученную расписку, считая себя «старее».
   // Чистая функция (тестируется без сети).
-  function localSupersedesCloud(cloud, localLog, localExtras, localReturns, localTimesheets) {
+  function localSupersedesCloud(cloud, localLog, localExtras, localReturns, localTimesheets, gone) {
+    return moneySupersedes(cloud, localLog, localExtras, localReturns) &&
+      timesheetsCovered(cloud, localTimesheets, gone);
+  }
+  function moneySupersedes(cloud, localLog, localExtras, localReturns) {
     function received(r) { return !!(r && (r.signature || r.signatureArchived)); }
     var cl = (cloud && cloud.log) || {};
     var ce = (cloud && cloud.extras) || [];
@@ -246,6 +370,9 @@ window.MetapelSync = (function () {
       for (var n = 0; n < localReturns.length; n++) if (localReturns[n].id === cr[m].id) { ok = true; break; }
       if (!ok) return false;
     }
+    return true;
+  }
+  function timesheetsCovered(cloud, localTimesheets, gone) {
     // Табели: локально может быть БОЛЬШЕ табелей, чем в облаке — это нормальное
     // ДОБАВЛЕНИЕ табеля на этом устройстве, и его надо донести до облака. Поэтому
     // равенства числа НЕ требуем (иначе свежезагруженный табель навсегда застревал
@@ -256,9 +383,12 @@ window.MetapelSync = (function () {
     // устройстве может «воскреснуть» при заливке — для табелей это безвредно
     // (можно удалить повторно). Для ДЕНЕГ (log/extras/returns) состав выше
     // по-прежнему сверяется СТРОГО на равенство, чтобы не воскрешать удалённые суммы.
+    // Табель, удалённый ЗДЕСЬ (gone — сам пользователь нажал «Удалить»), облачной
+    // копией не считается потерянным: удаление уезжает в облако.
     var ct = (cloud && cloud.timesheets) || [];
     var lt = localTimesheets || [];
     for (var p = 0; p < ct.length; p++) {
+      if (gone && gone.indexOf(ct[p].id) >= 0) continue;
       var okt = false;
       for (var q = 0; q < lt.length; q++) if (lt[q].id === ct[p].id) { okt = true; break; }
       if (!okt) return false;
@@ -283,8 +413,22 @@ window.MetapelSync = (function () {
     if (empty && !(store.getMeta('backupGeneration') > 0)) return Promise.resolve(false);
     // хэш только СОДЕРЖИМОГО (generation=0), чтобы рост версии не вызывал лишних заливок
     var dataHash = hashFn(buildBackupJson(settings, store, 0));
-    if (store.getMeta('lastBackupHash') === dataHash) return Promise.resolve(false);
+    if (store.getMeta('lastBackupHash') === dataHash) {
+      // устройство «чистое»: его данные и есть точка синхронизации — запомнить её
+      // части, если их ещё нет (первый запуск v6.14 без новых заливок/подтягиваний)
+      if (!validBase(store)) {
+        var b0 = partHashes(buildBackupObject(settings, store, 0), hashFn);
+        b0.h = dataHash;
+        store.setMeta('syncBase', b0);
+      }
+      return Promise.resolve(false);
+    }
+    var rev0 = typeof store.settingsRev === 'function' ? store.settingsRev() : 0;
     return readCloudBackup(settings).then(function (res) {
+      // настройки сохранили (новым объектом), пока шло чтение облака: этот прогон залил
+      // бы устаревшие настройки из памяти (и потерял бы чужие правки настроек) —
+      // пропускаем; прогон, запрошенный сохранением настроек, возьмёт свежие
+      if (typeof store.settingsRev === 'function' && store.settingsRev() !== rev0) return false;
       var cloud = res.data;
       var cloudGen = (cloud && typeof cloud.generation === 'number') ? cloud.generation : -1;
       var localGen = store.getMeta('backupGeneration') || 0;
@@ -299,31 +443,41 @@ window.MetapelSync = (function () {
       // и расписки не потеряны), значит мы на самом деле свежее — просто номер
       // отстал; пишем свою копию, ничего облачного не теряя (CAS по sha
       // по-прежнему защищает от гонки).
-      if (cloud && cloudGen > localGen &&
-          !localSupersedesCloud(cloud, store.loadLog(), store.loadExtras(), store.loadReturns(), store.loadTimesheets())) {
-        store.setMeta('lastSyncError',
-          'Облачная копия новее этого устройства — данные остаются локально; сообщите родственнику (Льву).');
-        return false;
+      // Облако ушло вперёд (на другом устройстве что-то записали), а здесь тоже есть
+      // правки — сначала сводим (mergeFromCloud: что здесь не меняли — берём из
+      // облака, записи табелей — по полям; заодно ОБЩИЙ параметр «суммы от Матав»
+      // принимается из облака, иначе устаревшие суммы откатили бы новые у всех).
+      // Конфликт остаётся, только если деньги правили и там, и тут так, что наши
+      // облачные не накрывают: тогда данные остаются локально — разруливает Лев.
+      if (cloud && cloudGen > localGen) {
+        var mr = mergeFromCloud(settings, store, cloud, hashFn);
+        if (mr.failed) {
+          store.setMeta('lastSyncError', 'Не удалось записать данные на этом устройстве (память заполнена?) — сообщите Льву.');
+          return false;
+        }
+        var gone = store.getMeta('tsGone') || [];
+        var ok = (mr.moneyOk || moneySupersedes(cloud, store.loadLog(), store.loadExtras(), store.loadReturns())) &&
+          timesheetsCovered(cloud, store.loadTimesheets(), gone);
+        if (!ok) {
+          store.setMeta('lastSyncError',
+            'Облачная копия новее этого устройства — данные остаются локально; сообщите родственнику (Льву).');
+          return false;
+        }
       }
-      // ОБЩИЙ параметр «суммы от Матав»: если облако новее (cloudGen>localGen), но мы
-      // заливаем (наши ДАННЫЕ накрывают облачные) — ПРИНИМАЕМ облачные суммы ПЕРЕД
-      // заливкой, иначе затёрли бы более новые своими устаревшими (откат у всех).
-      // Помесячные суммы при этом ОБЪЕДИНЯЮТСЯ: другое устройство могло ввести
-      // месяц, которого у нас нет, и он обязан уехать в облако вместе с нашими.
-      applySharedSettings(settings, store,
-        sharedSettingsFromCloud(cloud && cloud.settings, cloud && (cloudGen > localGen)));
       var newGen = Math.max(cloudGen, localGen) + 1;
-      var json = buildBackupJson(settings, store, newGen);
-      // хэш РОВНО того, что уходит в облако, — тем же мгновенным снимком, что json
-      // (настройки уже с принятой облачной суммой). Считать его после записи по живым
-      // данным нельзя: оплата / сумма от Матав, отмеченные, пока шла запись, сочлись
-      // бы «залитыми» и не уехали бы в облако никогда (находка ревью v6.13)
-      var pushedHash = hashFn(buildBackupJson(settings, store, 0));
+      // РОВНО то, что уходит в облако, и его хэш — одним мгновенным снимком. Считать
+      // хэш после записи по живым данным нельзя: оплата / сумма от Матав, отмеченные,
+      // пока шла запись, сочлись бы «залитыми» и не уехали бы в облако никогда
+      // (находка ревью v6.13)
+      var obj0 = buildBackupObject(settings, store, 0);
+      var objN = JSON.parse(JSON.stringify(obj0));
+      objN.generation = newGen;
+      var json = JSON.stringify(objN, null, 2);
       // CAS по прочитанному sha: если другое устройство залило между нашим чтением
       // и записью — putFile бросит ошибку, и мы не затрём чужую запись (гонка)
       return putFile(conf(settings), dataPrefix() + 'backup/data.json', json, 'Data backup gen ' + newGen, res.sha).then(function () {
         store.setMeta('backupGeneration', newGen);
-        store.setMeta('lastBackupHash', pushedHash);
+        setSyncedState(store, obj0, hashFn);
         store.setMeta('lastSyncError', null);
         return true;
       });
@@ -473,7 +627,7 @@ window.MetapelSync = (function () {
       var snapSettings = JSON.parse(JSON.stringify(settings));
       var newGen = localGen + 1;
       var json = buildBackupJson(snapSettings, view, newGen);
-      var pushedHash = hashFn(buildBackupJson(snapSettings, view, 0));
+      var pushedObj = buildBackupObject(snapSettings, view, 0);
       return putFile(conf(settings), dataPrefix() + 'backup/data.json', json,
         'Data backup gen ' + newGen + ' (подписи табелей — в файлах архива)', res.sha).then(function () {
         var n = 0;
@@ -484,7 +638,7 @@ window.MetapelSync = (function () {
         store.setMeta('backupGeneration', newGen);
         // хэш ровно того, что ушло в облако: изменённое здесь за время записи (если
         // было) останется «несинхронным» и уйдёт обычной заливкой
-        store.setMeta('lastBackupHash', pushedHash);
+        setSyncedState(store, pushedObj, hashFn);
         return n;
       });
     });
@@ -718,7 +872,7 @@ window.MetapelSync = (function () {
         applySharedSettings(settings, store, sharedSettingsFromCloud(cloud.settings, true));
       }
       store.setMeta('backupGeneration', state.cloudGen);
-      store.setMeta('lastBackupHash', hashFn(buildBackupJson(settings, store, 0)));
+      rememberSynced(settings, store, hashFn);
       store.setMeta('lastSyncError', null);
       return { generation: state.cloudGen };
     }).catch(function () { return null; }); // сеть/чтение упало — просто не тянем
@@ -736,6 +890,9 @@ window.MetapelSync = (function () {
     mergeMatavByMonth: mergeMatavByMonth,
     mergeSettingsFromCloud: mergeSettingsFromCloud, // нужна «Восстановить» в app.js
     localSupersedesCloud: localSupersedesCloud,
+    mergeFromCloud: mergeFromCloud,     // нужна тестам (трёхстороннее слияние)
+    partHashes: partHashes,
+    rememberSynced: rememberSynced,     // «Восстановить» в app.js
     fetchBackup: fetchBackup,
     buildBackupJson: buildBackupJson,
     fetchReceipt: fetchReceipt,

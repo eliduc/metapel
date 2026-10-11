@@ -45,13 +45,18 @@
       s.bl.approved = false;
       return s;
     }
+    // одна и та же сумма от Матав в каждом месяце 2026–2028 (с v6.15 зарплата и
+    // взносы считаются только по помесячным суммам — старая единая не подставляется)
+    function fillMonths(s, amount) {
+      s.bl.approved = true;
+      s.bl.matavByMonth = {};
+      for (var yy = 2026; yy <= 2028; yy++) for (var mm = 1; mm <= 12; mm++) s.bl.matavByMonth[yy + '-' + ('0' + mm).slice(-2)] = amount;
+      return s;
+    }
     // настройки с учтённой суммой от Матав (для проверки зачёта); 6266 — то же
     // значение, что давал прежний расчёт 26 ч × 241 ₪, чтобы суммы совпадали
     function withBl() {
-      var s = defaults();
-      s.bl.approved = true;
-      s.bl.matavAmount = 6266;
-      return s;
+      return fillMonths(defaults(), 6266);
     }
     function clone(s) { return JSON.parse(JSON.stringify(s)); }
     function occs(today, horizon, settings) {
@@ -73,19 +78,19 @@
     // ---------- зарплата ----------
     var june = occs('2026-06-12');
     var sJun = find(june, 'salary-2026-06');
-    eq('Зарплата за июнь: срок', sJun && sJun.dueDate, '2026-07-08');
+    eq('Зарплата за июнь: срок (9-е число, как переводы)', sJun && sJun.dueDate, '2026-07-09');
     // прораторуем нетто по календарным дням КРОМЕ суббот (18/26), субботы отдельно
     eq('Зарплата за июнь: сумма (6500×18/26 + 3×440 = 4500+1320)', sJun && sJun.amount, 5820);
     eq('Зарплата за июнь: суббот посчитано', sJun && sJun.satCount, 3);
     eq('Зарплата за июнь: есть разбивка', sJun && sJun.breakdown.length >= 3, true);
     // реальный случай Григория: сумма от Матав за июнь 840,12 вычитается ЦЕЛИКОМ
-    var sJunMatav = (function () { var s = defaults(); s.startDate = '2026-06-10'; s.bl.approved = true; s.bl.matavAmount = 840.12; return s; })();
+    var sJunMatav = (function () { var s = defaults(); s.startDate = '2026-06-10'; return fillMonths(s, 840.12); })();
     eq('Зарплата за июнь − Матав 840,12 целиком: 4500−840,12 + 1320 = 4979,88',
       find(C.generateOccurrences(sJunMatav, '2026-07-06', 60), 'salary-2026-06').amount, 4979.88);
 
     var july = occs('2026-08-01');
     var sJul = find(july, 'salary-2026-07');
-    eq('Зарплата за июль: срок', sJul && sJul.dueDate, '2026-08-08');
+    eq('Зарплата за июль: срок', sJul && sJul.dueDate, '2026-08-09');
     eq('Зарплата за июль: сумма (6500 + 4×440)', sJul && sJul.amount, 8260);
 
     // ---------- карманные ----------
@@ -198,10 +203,10 @@
       var o = find(occs(today), 'salary-2026-06');
       return C.getStatus(o, {}, today, st);
     }
-    eq('Статус зарплаты 1.07 (за 7 дней, окно 3) = upcoming', statusAt('2026-07-01'), 'upcoming');
-    eq('Статус зарплаты 5.07 (за 3 дня) = due', statusAt('2026-07-05'), 'due');
-    eq('Статус зарплаты 8.07 (в срок) = due', statusAt('2026-07-08'), 'due');
-    eq('Статус зарплаты 9.07 = overdue', statusAt('2026-07-09'), 'overdue');
+    eq('Статус зарплаты 1.07 (за 8 дней, окно 3) = upcoming', statusAt('2026-07-01'), 'upcoming');
+    eq('Статус зарплаты 6.07 (за 3 дня) = due', statusAt('2026-07-06'), 'due');
+    eq('Статус зарплаты 9.07 (в срок) = due', statusAt('2026-07-09'), 'due');
+    eq('Статус зарплаты 10.07 = overdue', statusAt('2026-07-10'), 'overdue');
     var oPaid = find(occs('2026-07-09'), 'salary-2026-06');
     eq('Статус с отметкой об оплате = paid',
       C.getStatus(oPaid, { 'salary-2026-06': { paidDate: '2026-07-08' } }, '2026-07-09', st), 'paid');
@@ -209,7 +214,7 @@
     // ---------- зачёт по сумме от Матав (гмлат сиуд) ----------
     eq('Учёт по умолчанию ВЫКЛ', defaults().bl.approved, false);
     eq('Зачёт без суммы от Матав = 0', C.blMonthlyOffset(defaults()), 0);
-    eq('Зачёт = сумма от Матав (6266)', C.blMonthlyOffset(withBl()), 6266);
+    eq('Зачёт = сумма от Матав за месяц (6266)', C.blMonthlyOffset(withBl(), 2026, 7), 6266);
     // пока сумма не указана — выплаты полные
     var fullJuly = C.generateOccurrences(defaults(), '2026-08-01', 60);
     eq('Зарплата без суммы от Матав — полная (6500 + 4×440)',
@@ -239,8 +244,8 @@
     eq('Зарплата при этом всё равно с зачётом',
       find(noSocList, 'salary-2026-07').amount, 1994);
     // прямая сумма от Матав 2000
-    var sMatav = defaults(); sMatav.bl.approved = true; sMatav.bl.matavAmount = 2000;
-    eq('Зачёт = сумма от Матав 2000', C.blMonthlyOffset(sMatav), 2000);
+    var sMatav = fillMonths(defaults(), 2000);
+    eq('Зачёт = сумма от Матав 2000', C.blMonthlyOffset(sMatav, 2026, 7), 2000);
     var matSal = find(C.generateOccurrences(sMatav, '2026-08-01', 60), 'salary-2026-07');
     eq('Зарплата с суммой 2000: 6500−2000 + 4×440', matSal && matSal.amount, 6260);
     eq('Разбивка зарплаты упоминает «Матав»',
@@ -251,15 +256,26 @@
     // нет отката на устаревший расчёт «часы × ставка»)
     var appNoAmt = defaults(); appNoAmt.bl.approved = true; appNoAmt.bl.matavAmount = 0;
     eq('approved без суммы → зачёт 0 (нет недоплаты)', C.blMonthlyOffset(appNoAmt), 0);
-    eq('approved без суммы → зарплата полная',
-      find(C.generateOccurrences(appNoAmt, '2026-08-01', 60), 'salary-2026-07').amount, 8260);
+    var noAmtSal = find(C.generateOccurrences(appNoAmt, '2026-08-01', 60), 'salary-2026-07');
+    eq('approved без суммы за месяц → зарплата не считается: «введите сумму от Матав»',
+      [noAmtSal.blMissing, noAmtSal.amount, /не введена/.test(noAmtSal.breakdown[0])], [true, 0, true]);
+    var legacyOnly = defaults(); legacyOnly.bl.approved = true; legacyOnly.bl.matavAmount = 4959.03;
+    var legSal = find(C.generateOccurrences(legacyOnly, '2026-10-10', 60), 'salary-2026-09');
+    eq('v6.15: старая единая сумма от Матав НЕ подставляется — зарплата ждёт сумму за месяц',
+      [legSal.blMissing, legSal.amount], [true, 0]);
+    var sep = fillMonths(defaults(), 0); sep.bl.matavByMonth['2026-09'] = 6470.42;
+    eq('Сентябрь-2026: Матав 6 470,42 → перевести 6 500 − 6 470,42 + 4 × 440 = 1 789,58',
+      find(C.generateOccurrences(sep, '2026-10-10', 60), 'salary-2026-09').amount, 1789.58);
+    var aug = fillMonths(defaults(), 0); aug.bl.matavByMonth['2026-08'] = 6354.34;
+    eq('Август-2026: Матав 6 354,34 → перевести 145,66 + 5 × 440 = 2 345,66',
+      find(C.generateOccurrences(aug, '2026-09-10', 60), 'salary-2026-08').amount, 2345.66);
     eq('sanitize: approved=true без суммы → approved=false',
       C.sanitizeSettings(appNoAmt).bl.approved, false);
     eq('sanitize: отрицательная сумма → 0',
       C.sanitizeSettings((function () { var s = withBl(); s.bl.matavAmount = -5; return s; })()).bl.matavAmount, 0);
     // кап зачёта по нетто-зарплате: сумма больше нетто не уводит доплату в минус
-    var bigMatav = defaults(); bigMatav.bl.approved = true; bigMatav.bl.matavAmount = 7000;
-    eq('Сумма 7000 > нетто 6500 → зачёт капится нетто 6500', C.blMonthlyOffset(bigMatav), 6500);
+    var bigMatav = fillMonths(defaults(), 7000);
+    eq('Сумма 7000 > нетто 6500 → зачёт капится нетто 6500', C.blMonthlyOffset(bigMatav, 2026, 7), 6500);
     eq('При зачёте ≥ нетто зарплата НЕ обнуляется (остаётся шабат)',
       find(C.generateOccurrences(bigMatav, '2026-08-01', 60), 'salary-2026-07').amount > 0, true);
     // нетто-зарплата НИЖЕ зачёта: соцзачёт НЕ урезается по net (взносы от настоящего зачёта)
@@ -314,7 +330,7 @@
     // ---------- способ оплаты по умолчанию ----------
     // С v6.3 по умолчанию ВСЕ типы — наличные (Григорий платит из рук в руки).
     eq('Карманные по умолчанию — наличные', defaults().types.pocket.defaultMethod, 'cash');
-    eq('Зарплата по умолчанию — наличные', defaults().types.salary.defaultMethod, 'cash');
+    eq('Зарплата по умолчанию — перевод (без расписки)', defaults().types.salary.defaultMethod, 'transfer');
     eq('Пикадон по умолчанию — наличные', defaults().types.pikadon.defaultMethod, 'cash');
 
     // ---------- ФИО и архив ----------

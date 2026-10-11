@@ -16,7 +16,7 @@
   // если понадобится снова заморозить прод, вернуть на `!(window.MetapelEnv &&
   // window.MetapelEnv.stage)`. Среды по-прежнему различает баннер STAGE и путь /stage/.
   var TS_STAGE_ONLY = false;
-  var APP_VERSION = '6.14 от 05.10.2026 (бланки сжимаются без потерь; табели и «отослано» не затираются отставшим устройством; защита собранных подписей)';
+  var APP_VERSION = '6.15 от 11.10.2026 (зарплата — переводом без подписи; считается только после ввода суммы от Матав)';
 
   // ---------- «сегодня» ----------
 
@@ -256,6 +256,9 @@
   function withStatus(list) {
     return list.map(function (o) {
       o.status = C.getStatus(o, log, today(), settings);
+      // зарплата без суммы от Матав за месяц ещё не посчитана: сумма приходит около
+      // 9-го — это ожидание, а не просрочка (см. dueLabel)
+      if (o.type === 'salary' && o.blMissing && o.status === 'overdue') o.status = 'due';
       return o;
     });
   }
@@ -353,6 +356,10 @@
   }
 
   function dueLabel(o) {
+    if (o.type === 'salary' && o.blMissing) {
+      return '<span class="soon">⏳ Ждём сумму от Матав</span><br>Когда придёт (обычно 9-го числа) — ' +
+        'введите её, и посчитается, сколько перевести.';
+    }
     var diff = C.diffDays(o.dueDate, today());
     var wd = C.parseISO(o.dueDate).getDay();
     if (o.status === 'overdue') {
@@ -2548,7 +2555,12 @@
     $('#pay-amount').value = o.amount;
     $('#pay-date').value = today();
     $('#pay-details').style.display = 'none'; // детали — по явному запросу
-    payMethod = settings.types[o.type].defaultMethod || 'cash';
+    // зарплата — только банковским переводом и без расписки (решение пользователя
+    // 11.10.2026: перевод подтверждает банк); у остальных выплат — выбор, как раньше
+    var salary = o.type === 'salary';
+    payMethod = salary ? 'transfer' : (settings.types[o.type].defaultMethod || 'cash');
+    $('#pay-method-row').style.display = salary ? 'none' : '';
+    $('#pay-transfer-hint').style.display = salary ? '' : 'none';
     updateMethodButtons();
     updatePayBig();
     $('#modal-pay').classList.add('open');
@@ -2597,6 +2609,7 @@
     if (isNaN(amount) || amount < 0) { appAlert('Укажите сумму.'); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(paidDate)) { appAlert('Укажите дату оплаты.'); return; }
     var id = currentPay.id;
+    if (currentPay.type === 'salary') payMethod = 'transfer'; // зарплата — только переводом
     var needSign = payMethod === 'cash';
     S.markPaid(id, {
       title: currentPay.title,
@@ -3104,11 +3117,8 @@
     var by = (bl.matavByMonth && typeof bl.matavByMonth === 'object') ? bl.matavByMonth : {};
     var keys = Object.keys(by).filter(function (k) { return YM_RE.test(k); }).sort().reverse();
     if (!keys.length) {
-      fs.appendChild(el('div', 'hint', 'Помесячных сумм пока нет' +
-        (bl.matavAmount > 0
-          ? ' — пока считается по старой единой сумме ' + C.fmtMoney(bl.matavAmount) +
-            ' в месяц. Как только введёте первый месяц, считаться будут только помесячные суммы.'
-          : '.')));
+      fs.appendChild(el('div', 'hint', 'Помесячных сумм пока нет. Зарплата за месяц считается ' +
+        'только после того, как введена сумма от Матав за этот месяц.'));
     }
     keys.forEach(function (k) {
       var row = el('div', 'form-row');
@@ -3201,8 +3211,8 @@
         { path: 'types.salary.net', label: 'Нетто в месяц, ₪', type: 'number' },
         { path: 'types.salary.shabbatRate', label: 'За субботу (шабат), ₪', type: 'number' },
         { path: 'types.salary.dayOfMonth', label: 'День выплаты (числа следующего месяца)', type: 'number' },
-        { path: 'types.salary.noticeDays', label: 'Первое напоминание за, дней', type: 'number' },
-        methodField('salary')
+        { path: 'types.salary.noticeDays', label: 'Первое напоминание за, дней', type: 'number' }
+        // способ оплаты зарплаты не настраивается: всегда банковский перевод без расписки
       ] },
       { section: 'Карманные (дмей кис)', enable: 'types.pocket.enabled', fields: [
         { path: 'types.pocket.amount', label: 'Сумма в неделю, ₪', type: 'number' },

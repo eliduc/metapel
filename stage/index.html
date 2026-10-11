@@ -53,7 +53,7 @@
           <button type="button" id="pay-sats-plus">+</button>
         </div>
       </div>
-      <div class="form-row">
+      <div class="form-row" id="pay-method-row">
         <label>Как оплачено</label>
         <div class="method-toggle">
           <button type="button" class="method-btn" id="pay-method-transfer">🏦 Перевод</button>
@@ -72,6 +72,7 @@
         </div>
       </div>
       <div class="hint" id="pay-cash-hint" style="display:none">После подтверждения метапель распишется в получении.</div>
+      <div class="hint" id="pay-transfer-hint" style="display:none">🏦 Зарплата — банковским переводом на счёт метапеля. Подпись не нужна: перевод подтверждает банк.</div>
       <div class="modal-actions">
         <button class="btn btn-pay" id="pay-confirm">✓ Да, деньги выплачены</button>
         <button class="btn btn-undo modal-close">Отмена — вернуться назад</button>
